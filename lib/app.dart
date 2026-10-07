@@ -130,9 +130,13 @@ class _OpenStrapAppState extends State<OpenStrapApp> with WidgetsBindingObserver
       title: 'OpenStrap',
       debugShowCheckedModeBanner: false,
       // The palette is the design system's, the CHOICE is still the user's.
-      theme: buildTheme(Brightness.light),
-      darkTheme: buildTheme(Brightness.dark),
+      theme: buildTheme(Brightness.light, style: theme.interfaceStyle,
+          palette: theme.palette),
+      darkTheme: buildTheme(Brightness.dark, style: theme.interfaceStyle,
+          palette: theme.palette),
       themeMode: theme.materialThemeMode,
+      themeAnimationStyle:
+          Motion.enabled(context) ? null : AnimationStyle.noAnimation,
       locale: locale.locale, // null = follow the OS locale
       // First, so a 12-hour choice reaches the time pickers (see the delegate).
       localizationsDelegates: [
@@ -494,8 +498,13 @@ class _Shell extends StatefulWidget {
 
 class _ShellState extends State<_Shell> {
   /// Restore the last-selected tab so a relaunch lands where the user left off.
-  late ShellDomain _domain = ShellDomain
-      .values[Prefs.getInt(Prefs.shellTab, 0).clamp(0, ShellDomain.values.length - 1)];
+  late ShellDomain _domain = _restoredDomain();
+
+  ShellDomain _restoredDomain() {
+    final saved = ShellDomain.values[
+        Prefs.getInt(Prefs.shellTab, 0).clamp(0, ShellDomain.values.length - 1)];
+    return visibleShellDomains.contains(saved) ? saved : ShellDomain.home;
+  }
 
   /// AppShell owns its own selection and takes only an `initial`, so a
   /// programmatic jump re-keys it.
@@ -574,16 +583,25 @@ class _ShellState extends State<_Shell> {
       }
       return;
     }
-    if (tab >= 0) _go(domainForTab(tab));
+    if (tab >= 0) {
+      final domain = domainForTab(tab);
+      _go(domain);
+      // Existing nutrition notification links remain usable without a tab.
+      if (domain == ShellDomain.nutrition) {
+        Navigator.of(context).push(themedRoute<void>(
+            (_) => const NutritionScreen(), name: 'NutritionScreen'));
+      }
+    }
   }
 
   void _go(ShellDomain d) {
-    if (d == _domain) return;
+    final target = visibleShellDomains.contains(d) ? d : ShellDomain.home;
+    if (target == _domain) return;
     setState(() {
-      _domain = d;
+      _domain = target;
       _rev++;
     });
-    Prefs.setInt(Prefs.shellTab, d.index);
+    Prefs.setInt(Prefs.shellTab, target.index);
   }
 
   @override

@@ -498,7 +498,7 @@ class _CoachScreenState extends State<CoachScreen> {
                     'through OpenStrap either way.',
             fix: l?.coachChooseModelFix ?? 'Choose a model',
             icon: LucideIcons.sparkles,
-            onFix: () => go(c, const CoachSetup()),
+            destination: const CoachSetup(),
           ),
         ],
       );
@@ -620,7 +620,7 @@ class _CoachScreenState extends State<CoachScreen> {
             ),
             decoration: BoxDecoration(
               color: p.card,
-              borderRadius: R.rXl,
+              borderRadius: p.expressive ? R.rXxl : R.rXl,
               border: Border.all(color: p.line),
             ),
             child: Semantics(
@@ -691,7 +691,7 @@ class _Bubble extends StatelessWidget {
             ),
             decoration: BoxDecoration(
               color: p.wash(kCoachAccent),
-              borderRadius: R.rLg,
+              borderRadius: R.cardOf(c),
             ),
             child: Text(
               item.text ?? '',

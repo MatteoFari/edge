@@ -233,8 +233,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
     // `select`, not `watch`: this screen lives in the shell's IndexedStack and
     // stays mounted, so a plain watch would rebuild it on every unrelated
     // AppState notification for the life of the app.
-    final showCycle =
-        c.select<AppState, bool>((a) => a.cycleTrackingEnabled);
+    final showCycle = c.select<AppState, bool>((a) => a.cycleTrackingEnabled);
     final labels = [
       l?.wellnessTabMind ?? 'Mind',
       l?.wellnessTabRecovery ?? 'Recovery',
@@ -246,76 +245,94 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
     // Clamped rather than reset: switching Cycle off while standing on it
     // lands on Medication, not back at Mind.
     final tab = _tab.clamp(0, tabs.length - 1);
-    // Same rule as Workout: the LIST drops its side padding and hands it to
-    // every child except the hero, which is how that one runs edge to edge.
-    // The card cannot escape its own parent — a negative margin asserts and an
-    // OverflowBox takes an unbounded height in a scroll view and blanks the
-    // whole tab. Padding the siblings is ordinary layout and does neither.
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(0, S.x4, 0, S.x16),
+    final inset = shellScrollPadding(
+      c,
+      const EdgeInsets.fromLTRB(0, S.x4, 0, S.x16),
+    );
+    return Column(
       children: [
-        for (final w in <Widget>[
-          ScreenTitle(l?.wellnessTitle ?? 'Wellness'),
-          SubTabs(tabs, tab, (i) => setState(() => _tab = i),
-              color: C.domMind),
-          const SizedBox(height: S.x5),
-          if (_loading)
-            const Center(child: CircularProgressIndicator())
-          else ...[
-            // Mind is the only tab here with something to START. The other
-            // four are logs and reviews, and a "begin" card over a medication
-            // list would be an invitation to nothing.
-            if (tab == 0) ...[
-              StartCard(
-                label: l?.wellnessStartASitting ?? 'START A SITTING',
-                // What the picker actually offers. Three, not the number of
-                // things on this tab.
-                count: kBreathPatterns.length,
-                noun: l?.wellnessExercisesNoun ?? 'exercises',
-                sub: last == null
-                    ? (l?.wellnessPickOneAndGo ?? 'Pick one and go')
-                    : (l?.wellnessLastMinutes(
-                            (_reading(last['seconds']) ?? 0) ~/ 60) ??
-                        'Last: ${(_reading(last['seconds']) ?? 0) ~/ 60} min'),
-                asset: 'mascot_wellness.png',
-                accent: C.domMind,
-                deep: C.teal,
-                // Sized so the CHARACTER matches Workout's, not the frame.
-                // Two corrections got us here: the asset carried ~30%
-                // transparent padding (cropped away), and what is left still
-                // has a soft halo above the head, so the figure is 87% of the
-                // frame height where the workout mascot is 100% of its own.
-                // 145 x 0.87 puts the character at ~126, the same as Workout.
-                // Not cropped tighter than this on purpose — the halo is nearly
-                // opaque, so trimming it slices a hard arc through the artwork.
-                // The 118 here was originally compensating for
-                // ~30% transparent padding baked into the asset, which made
-                // the art render a third smaller than the workout one at the
-                // same height. The asset is cropped to its own alpha bounds,
-                // so the height is the art's height and the two mascots read
-                // as the same size. Still slightly wider than tall (1.03 vs
-                // 0.93), and at 126 that is 130 px — narrower than the padded
-                // asset was, so the copy has more room than before, not less.
-                mascotHeight: 145,
-                onTap: () async {
-                  await Navigator.of(c).push(
-                    MaterialPageRoute<void>(
-                        builder: (_) => const CalmBreathing()),
-                  );
-                  await _load();
-                },
+        Padding(
+          padding: EdgeInsets.fromLTRB(S.x4, inset.top, S.x4, 0),
+          child: Column(
+            children: [
+              ScreenTitle(l?.wellnessTitle ?? 'Wellness'),
+              SubTabs(
+                tabs,
+                tab,
+                (i) => setState(() => _tab = i),
+                color: C.domMind,
               ),
-              const SizedBox(height: S.x4),
+              const SizedBox(height: S.x5),
             ],
-            [_mind, _recovery, _habitsTab, _medication, _cycle][tab](c),
-          ],
-        ])
-          if (w is StartCard)
-            w
-          else
-            Padding(
-                padding: const EdgeInsets.symmetric(horizontal: S.x4),
-                child: w),
+          ),
+        ),
+        Expanded(
+          child: SubPages(
+            index: tab,
+            count: tabs.length,
+            onChanged: (i) => setState(() => _tab = i),
+            builder: (c, i) => ListView(
+              key: PageStorageKey('wellness-tab-$i'),
+              padding: EdgeInsets.only(bottom: inset.bottom),
+              children: [
+                for (final w in <Widget>[
+                  if (_loading)
+                    const Center(child: CircularProgressIndicator())
+                  else ...[
+                    if (i == 0) ...[
+                      StartCard(
+                        label: l?.wellnessStartASitting ?? 'START A SITTING',
+                        // What the picker actually offers. Three, not the number of
+                        // things on this tab.
+                        count: kBreathPatterns.length,
+                        noun: l?.wellnessExercisesNoun ?? 'exercises',
+                        sub: last == null
+                            ? (l?.wellnessPickOneAndGo ?? 'Pick one and go')
+                            : (l?.wellnessLastMinutes(
+                                    (_reading(last['seconds']) ?? 0) ~/ 60,
+                                  ) ??
+                                  'Last: ${(_reading(last['seconds']) ?? 0) ~/ 60} min'),
+                        asset: 'mascot_wellness.png',
+                        accent: C.domMind,
+                        deep: C.teal,
+                        // Sized so the CHARACTER matches Workout's, not the frame.
+                        // Two corrections got us here: the asset carried ~30%
+                        // transparent padding (cropped away), and what is left still
+                        // has a soft halo above the head, so the figure is 87% of the
+                        // frame height where the workout mascot is 100% of its own.
+                        // 145 x 0.87 puts the character at ~126, the same as Workout.
+                        // Not cropped tighter than this on purpose — the halo is nearly
+                        // opaque, so trimming it slices a hard arc through the artwork.
+                        // The 118 here was originally compensating for
+                        // ~30% transparent padding baked into the asset, which made
+                        // the art render a third smaller than the workout one at the
+                        // same height. The asset is cropped to its own alpha bounds,
+                        // so the height is the art's height and the two mascots read
+                        // as the same size. Still slightly wider than tall (1.03 vs
+                        // 0.93), and at 126 that is 130 px — narrower than the padded
+                        // asset was, so the copy has more room than before, not less.
+                        mascotHeight: 145,
+                        onNavigate: (open) async {
+                          await open<void>(const CalmBreathing());
+                          await _load();
+                        },
+                      ),
+                      const SizedBox(height: S.x4),
+                    ],
+                    [_mind, _recovery, _habitsTab, _medication, _cycle][i](c),
+                  ],
+                ])
+                  if (w is StartCard)
+                    w
+                  else
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: S.x4),
+                      child: w,
+                    ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
@@ -352,10 +369,8 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
           l?.wellnessOpen ?? 'Open',
           LucideIcons.notebookPen,
           C.blue,
-          onTap: () async {
-            await Navigator.of(c).push(
-              MaterialPageRoute<void>(builder: (_) => const JournalCompose()),
-            );
+          onNavigate: (open) async {
+            await open<void>(const JournalCompose());
             await _load();
           },
         ),
@@ -462,9 +477,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
                       'tonight\'s is ${_hm(needSec / 60)}.',
               l?.wellnessSeeWhatLastNightCost ?? 'See what last night cost you',
               color: C.indigo,
-              onTap: () => Navigator.of(c).push(
-                MaterialPageRoute<void>(builder: (_) => const SleepDetail()),
-              ),
+              destination: const SleepDetail(),
             ),
           ),
         Section(
@@ -650,9 +663,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
           l?.wellnessOpen ?? 'Open',
           LucideIcons.scatterChart,
           C.domMind,
-          onTap: () => Navigator.of(c).push(
-            MaterialPageRoute<void>(builder: (_) => const JournalFindings()),
-          ),
+          destination: const JournalFindings(),
         ),
       ],
     );
@@ -1233,7 +1244,10 @@ Future<MedSchedule?> pickMedSchedule(
     isScrollControlled: true,
     builder: (sheet) => SafeArea(
       child: StatefulBuilder(
-        builder: (sheet, setSheet) => Padding(
+        builder: (sheet, setSheet) {
+          // Theme changes rebuild the open sheet without recreating its draft.
+          final p = P.of(sheet);
+          return Padding(
           padding: const EdgeInsets.fromLTRB(S.x5, 0, S.x5, S.x5),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -1254,13 +1268,16 @@ Future<MedSchedule?> pickMedSchedule(
                       minute: minute % 60,
                     ),
                   );
-                  if (at != null) {
+                  if (sheet.mounted && at != null) {
                     setSheet(() => minute = at.hour * 60 + at.minute);
                   }
                 },
                 child: Container(
                   padding: const EdgeInsets.all(S.x4),
-                  decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+                  decoration: BoxDecoration(
+                    color: p.card2,
+                    borderRadius: R.controlOf(sheet),
+                  ),
                   child: Row(
                     children: [
                       Icon(LucideIcons.clock, size: 17, color: p.ink3),
@@ -1343,7 +1360,8 @@ Future<MedSchedule?> pickMedSchedule(
               ),
             ],
           ),
-        ),
+          );
+        },
       ),
     ),
   );
@@ -1415,7 +1433,7 @@ class MedRow extends StatelessWidget {
               height: 36,
               decoration: BoxDecoration(
                 color: p.wash(C.blue),
-                borderRadius: R.rMd,
+                borderRadius: R.controlOf(c),
               ),
               child: Icon(LucideIcons.pill, size: 17, color: p.on(C.blue)),
             ),

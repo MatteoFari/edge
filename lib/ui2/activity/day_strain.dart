@@ -88,8 +88,16 @@ class DayStrainData {
 
   bool get hasCurve => curve.any((v) => v != null);
 
-  static Future<DayStrainData> load(LocalRepository repo) async {
-    final asked = todayLabel();
+  List<String> get timeLabels {
+    final start = day;
+    if (start == null || curve.isEmpty) return const ['00:00', '12:00', '24:00'];
+    final mid = DateTime.fromMillisecondsSinceEpoch(
+        start.millisecondsSinceEpoch + (curve.length ~/ 2) * 60000);
+    return ['00:00', '${mid.hour.toString().padLeft(2, '0')}:${mid.minute.toString().padLeft(2, '0')}', '24:00'];
+  }
+
+  static Future<DayStrainData> load(LocalRepository repo, {String? want}) async {
+    final asked = want ?? todayLabel();
     final s = await repo.getDayStrain(asked);
     if (s.isEmpty) return const DayStrainData();
 
@@ -106,10 +114,12 @@ class DayStrainData {
           DateTime.fromMillisecondsSinceEpoch(pts.first.$1 * 1000);
       day = DateTime(first.year, first.month, first.day);
       final dayStart = day.millisecondsSinceEpoch ~/ 1000;
-      final out = List<double?>.filled(1440, null);
+      final minutes = DateTime(day.year, day.month, day.day + 1)
+          .difference(day).inMinutes;
+      final out = List<double?>.filled(minutes, null);
       for (final p in pts) {
         final i = (p.$1 - dayStart) ~/ 60;
-        if (i >= 0 && i < 1440) out[i] = p.$2;
+        if (i >= 0 && i < minutes) out[i] = p.$2;
       }
       grid = out;
     }
@@ -158,7 +168,8 @@ class DayStrainData {
 class DayStrainDetail extends StatefulWidget {
   /// Preloaded, for goldens. Null means read the repo on open.
   final DayStrainData? data;
-  const DayStrainDetail({super.key, this.data});
+  final String? day;
+  const DayStrainDetail({super.key, this.data, this.day});
 
   @override
   State<DayStrainDetail> createState() => _DayStrainDetailState();
@@ -186,7 +197,7 @@ class _DayStrainDetailState extends State<DayStrainDetail> {
       return;
     }
     try {
-      final d = await DayStrainData.load(repo);
+      final d = await DayStrainData.load(repo, want: widget.day);
       if (mounted) setState(() => (_d = d, _loading = false));
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -277,7 +288,7 @@ class _DayStrainDetailState extends State<DayStrainDetail> {
             unit: '0–21',
             height: 170,
             yAxis: axis,
-            xLabels: const ['00:00', '12:00', '24:00'],
+            xLabels: d.timeLabels,
             series: d.curve,
             footnote: l?.dayStrainChartFootnote(drawn) ??
                 'Effort banked above your usual waking pace — it can ease '

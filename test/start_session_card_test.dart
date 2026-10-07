@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:openstrap_edge/ui2/screens/start_card.dart';
 import 'package:openstrap_edge/ui2/theme.dart';
 
@@ -83,6 +84,38 @@ void main() {
     await pump(t, scale: 2.0);
     expect(t.takeException(), isNull);
   });
+
+  for (final style in InterfaceStyle.values) {
+    for (final scale in [1.0, 2.0, 3.1]) {
+      testWidgets('${style.name} lays out inside its actual scrolling parent '
+          'at ${scale}x text', (t) async {
+        t.view.physicalSize = const Size(390 * 2, 844 * 2);
+        t.view.devicePixelRatio = 2;
+        addTearDown(t.view.reset);
+        await t.pumpWidget(MaterialApp(
+          theme: buildTheme(Brightness.light, style: style),
+          builder: (c, child) => MediaQuery(
+            data: MediaQuery.of(c).copyWith(textScaler: TextScaler.linear(scale)),
+            child: child!,
+          ),
+          home: Scaffold(body: ListView(children: const [
+            StartCard(
+              label: 'START A SESSION', count: 71, noun: 'activities',
+              asset: 'mascot_workout.png', accent: C.purple, deep: C.indigo,
+            ),
+            Text('Next card'),
+          ])),
+        ));
+        expect(t.takeException(), isNull);
+        final bounds = t.getRect(find.byType(StartCard));
+        final play = t.getRect(find.byIcon(LucideIcons.play));
+        expect(bounds.contains(play.topLeft), isTrue);
+        expect(bounds.contains(play.bottomRight), isTrue);
+        expect(t.getTopLeft(find.text('Next card')).dy,
+            greaterThanOrEqualTo(bounds.bottom));
+      });
+    }
+  }
 
   testWidgets('the wellness card is the same component, its own colour',
       (t) async {

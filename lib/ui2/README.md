@@ -7,7 +7,7 @@ import 'package:openstrap_edge/ui2/ui2.dart';
 ```
 
 Five files: `theme.dart` (tokens), `grammar.dart` (components), `charts.dart`
-and `paint_activity.dart` (painters), `app_shell.dart` (the five tabs).
+and `paint_activity.dart` (painters), `app_shell.dart` (the four visible tabs).
 
 ---
 
@@ -409,9 +409,12 @@ enum ShellDomain { home, health, nutrition, workout, wellness }
   // .label · .icon · .accent
 ```
 
-Tabs build lazily and are kept alive after first visit. **There is no sixth
-tab.** Anything that feels like one is `SubTabs` inside the domain that owns
-it.
+`visibleShellDomains` exposes Home, Health, Workout and Wellness in both
+interfaces. Nutrition remains an internal domain; the enum order and saved
+indices stay stable. A legacy Nutrition selection starts at Home.
+
+Tabs build lazily and are kept alive after first visit. Additional destinations
+belong in `SubTabs` inside the domain that owns them.
 
 ### The catalogue — Health › Explore
 

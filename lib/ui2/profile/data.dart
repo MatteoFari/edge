@@ -321,7 +321,7 @@ class _DataScreenState extends State<DataScreen> {
                       sub: l?.dataFromYourPhoneSub ??
                           'Resting heart rate, blood pressure, glucose and '
                               'body temperature',
-                      onTap: _busy ? null : () => goto(c, const PhoneImport())),
+                      destination: _busy ? null : const PhoneImport()),
                 ]),
                 const SizedBox(height: S.x5),
                 settingsGroup(c, l?.dataRebuildGroup ?? 'Rebuild', [

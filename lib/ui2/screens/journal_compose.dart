@@ -461,7 +461,7 @@ class MoodPicker extends StatelessWidget {
                       // centres the face.
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        borderRadius: R.rMd,
+                        borderRadius: R.controlOf(c),
                         color: value == i + 1
                             ? p.fill(_tints[i])
                             : p.wash(_tints[i]),
@@ -590,7 +590,10 @@ class _Step extends StatelessWidget {
       child: Container(
         width: 32,
         height: 32,
-        decoration: BoxDecoration(color: p.card2, borderRadius: R.rSm),
+        decoration: BoxDecoration(
+          color: p.card2,
+          borderRadius: p.expressive ? R.rPill : R.rSm,
+        ),
         child: Icon(icon, size: 16, color: enabled ? p.ink2 : p.ink3),
       ),
     );
@@ -628,7 +631,7 @@ class OsTextField extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: S.x3, vertical: S.x2),
           decoration: BoxDecoration(
             color: p.card,
-            borderRadius: R.rMd,
+            borderRadius: p.expressive ? R.rXl : R.rMd,
             border: Border.all(color: p.line),
           ),
           // The label is drawn as a sibling `Text`, which a screen reader reads
@@ -735,7 +738,10 @@ class _WeightRow extends StatelessWidget {
                     horizontal: S.x3,
                     vertical: S.x2,
                   ),
-                  decoration: BoxDecoration(color: p.card2, borderRadius: R.rSm),
+                  decoration: BoxDecoration(
+                    color: p.card2,
+                    borderRadius: p.expressive ? R.rPill : R.rSm,
+                  ),
                   child: Text(
                     v == null
                         ? (l?.journalComposeEnter ?? 'Enter')
@@ -1073,7 +1079,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
           height: MediaQuery.of(c).size.height * 0.75,
           decoration: BoxDecoration(
             color: p.bg,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(R.lg)),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(p.expressive ? R.xxl : R.lg)),
           ),
           child: Column(
             children: [
@@ -1119,7 +1125,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                                   maxWidth: MediaQuery.of(c).size.width * 0.75),
                               decoration: BoxDecoration(
                                 color: t.fromUser ? p.fill(C.domMind) : p.card2,
-                                borderRadius: R.rMd,
+                                borderRadius: p.expressive ? R.rXl : R.rMd,
                               ),
                               child: Text(
                                 t.text,
@@ -1158,7 +1164,9 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                         decoration: InputDecoration(
                           isDense: true,
                           hintText: 'Tell it about your day…',
-                          border: OutlineInputBorder(borderRadius: R.rMd),
+                          border: OutlineInputBorder(
+                            borderRadius: p.expressive ? R.rXl : R.rMd,
+                          ),
                         ),
                       ),
                     ),
@@ -1171,7 +1179,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
                           color: p.fill(C.domMind),
-                          borderRadius: R.rMd,
+                          borderRadius: R.controlOf(c),
                         ),
                         child: _busy
                             ? SizedBox(

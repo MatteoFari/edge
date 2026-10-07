@@ -22,7 +22,7 @@ import '../../coach/coach_engine.dart' show CoachException;
 import '../../l10n/app_localizations.dart';
 import '../ui2.dart';
 import 'coach.dart' show CoachSetup, kCoachAccent;
-import 'home_screen.dart' show go, pad, repoOf;
+import 'home_screen.dart' show pad, repoOf;
 
 class AiBriefingScreen extends StatefulWidget {
   final BriefingPeriod period;
@@ -104,7 +104,7 @@ class _AiBriefingScreenState extends State<AiBriefingScreen> {
                               'has been sent anywhere.',
                       fix: l?.aiBriefingChooseModel ?? 'Choose a model',
                       icon: LucideIcons.sparkles,
-                      onFix: () => go(c, const CoachSetup()),
+                      destination: const CoachSetup(),
                     )
                   else if (b == null)
                     StatusCard(

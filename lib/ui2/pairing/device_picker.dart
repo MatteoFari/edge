@@ -521,7 +521,7 @@ class _SearchField extends StatelessWidget {
     return Container(
       constraints: const BoxConstraints(minHeight: S.tap),
       padding: const EdgeInsets.symmetric(horizontal: S.x4),
-      decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+      decoration: BoxDecoration(color: p.card2, borderRadius: R.controlOf(c)),
       child: Row(children: [
         Icon(LucideIcons.search, size: 17, color: p.ink3),
         const SizedBox(width: S.x2),

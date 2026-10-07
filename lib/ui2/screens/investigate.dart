@@ -319,7 +319,7 @@ class _InvestigateState extends State<Investigate> {
             l?.investigateWhatHappenedTitle ?? 'What happened that day',
             l?.investigateWhatHappenedSub ??
                 'Sleep, sessions, meals and logs in time order',
-            () => go(c, DayTimelineScreen(day: d.day)),
+            null, destination: DayTimelineScreen(day: d.day),
           ),
         ],
         const SizedBox(height: S.x5),

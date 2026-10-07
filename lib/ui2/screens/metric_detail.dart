@@ -872,7 +872,7 @@ class _MetricDetailState extends State<MetricDetail> {
           icon: spec.icon,
         ),
         const SizedBox(height: S.x5),
-        investigateRow(c, () => go(c, Investigate(widget.metricKey))),
+        investigateRow(c, null, destination: Investigate(widget.metricKey)),
       ] else if (vals.isEmpty) ...[
         _ranges(c, d, spec.color),
         const SizedBox(height: S.x5),
@@ -917,7 +917,7 @@ class _MetricDetailState extends State<MetricDetail> {
               steps: null, goal: d.stepGoal, color: spec.color, onSaved: _load),
         ],
         const SizedBox(height: S.x5),
-        investigateRow(c, () => go(c, Investigate(widget.metricKey))),
+        investigateRow(c, null, destination: Investigate(widget.metricKey)),
       ] else ...[
         _ranges(c, d, spec.color),
         const SizedBox(height: S.x5),
@@ -965,7 +965,7 @@ class _MetricDetailState extends State<MetricDetail> {
               l?.metricDetailBeatsLinkTitle ?? 'Beats',
               l?.metricDetailBeatsLinkSub ??
                   'The intervals a night is made of, drawn',
-              () => go(c, const Beats())),
+              null, destination: const Beats()),
           const SizedBox(height: S.x3),
         ],
         // TODAY ONLY, and it is called Breakdown.
@@ -985,10 +985,10 @@ class _MetricDetailState extends State<MetricDetail> {
               l?.metricDetailBreakdownLinkTitle ?? 'Breakdown',
               l?.metricDetailBreakdownLinkSub ??
                   'Each stretch of today, and what counted it',
-              () => go(c, const DayStepsDetail())),
+              null, destination: const DayStepsDetail()),
           const SizedBox(height: S.x3),
         ],
-        investigateRow(c, () => go(c, Investigate(widget.metricKey))),
+        investigateRow(c, null, destination: Investigate(widget.metricKey)),
       ],
     ]);
   }
@@ -1532,7 +1532,7 @@ class _MetricDetailState extends State<MetricDetail> {
       child: Surface(
         color: p.card2,
         elevation: 0,
-        onTap: v == null ? null : () => go(c, _dayScreen(widget.metricKey, day)),
+        destination: v == null ? null : _dayScreen(widget.metricKey, day),
         semanticLabel: [
           v == null
               ? (l?.metricDetailSlotNoRecord(prettyDay(day, l)) ??
@@ -1990,7 +1990,7 @@ class DayNav extends StatelessWidget {
         );
 
     return Container(
-      decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+      decoration: BoxDecoration(color: p.card2, borderRadius: R.controlOf(c)),
       child: Row(children: [
         arrow(LucideIcons.chevronLeft, l?.metricDetailPreviousDay ?? 'Previous day',
             older),
@@ -1998,7 +1998,7 @@ class DayNav extends StatelessWidget {
           child: Pressable(
             onTap: () async {
               final picked = await chooseDay(c, days, day);
-              if (picked != null && picked != day) onDay(picked);
+              if (c.mounted && picked != null && picked != day) onDay(picked);
             },
             semanticLabel: l?.metricDetailChooseDayShowing(dayNavLabel(day)) ??
                 'Choose a day. Showing ${dayNavLabel(day)}',
@@ -2032,14 +2032,18 @@ List<Widget> dayNavRow(
 /// card, and a metric screen that grows a second loud card stops having a
 /// headline.
 Widget detailLinkRow(BuildContext c, IconData icon, String title, String sub,
-    VoidCallback onTap) {
+    VoidCallback? onTap, {Widget? destination,
+    Future<void> Function(DetailOpener)? onNavigate}) {
   final p = P.of(c);
-  return Pressable(
-    onTap: onTap,
+  Widget press(VoidCallback? tap) => Pressable(
+    onTap: tap,
     semanticLabel: '$title: $sub',
     child: Container(
       padding: const EdgeInsets.all(S.x4),
-      decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+      decoration: BoxDecoration(
+        color: p.card2,
+        borderRadius: p.expressive ? R.rXxl : R.rMd,
+      ),
       child: Row(children: [
         Icon(icon, size: 17, color: p.ink3),
         const SizedBox(width: S.x3),
@@ -2054,6 +2058,17 @@ Widget detailLinkRow(BuildContext c, IconData icon, String title, String sub,
       ]),
     ),
   );
+  return destination == null && onNavigate == null
+      ? press(onTap)
+      : DetailLink(color: p.card2,
+          radius: p.expressive ? R.rXxl : R.rMd,
+          builder: (open) => press(() {
+            if (onNavigate != null) {
+              onNavigate(open);
+            } else {
+              open<void>(destination!);
+            }
+          }));
 }
 
 /// The door into density 3 — the screen the user sees as "Nerd stats". Kept
@@ -2063,7 +2078,7 @@ Widget detailLinkRow(BuildContext c, IconData icon, String title, String sub,
 ///
 /// The identifier stays `investigateRow` to match `investigate.dart` and the
 /// `investigate_row` gallery key; only the string changed.
-Widget investigateRow(BuildContext c, VoidCallback onTap) => detailLinkRow(
+Widget investigateRow(BuildContext c, VoidCallback? onTap, {Widget? destination}) => detailLinkRow(
     c,
     LucideIcons.cpu,
     AppLocalizations.of(c)?.metricDetailNerdStatsTitle ?? 'Nerd stats',
@@ -2072,7 +2087,7 @@ Widget investigateRow(BuildContext c, VoidCallback onTap) => detailLinkRow(
     // a copy change — keep it at or under the old string's length.
     AppLocalizations.of(c)?.metricDetailNerdStatsSub ??
         'The figures behind the picture',
-    onTap);
+    onTap, destination: destination);
 
 /// A two-column legend. Used by the hypnogram and the overnight stack.
 class Legend extends StatelessWidget {

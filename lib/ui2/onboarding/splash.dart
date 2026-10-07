@@ -6,13 +6,11 @@
 // `loading`. Shown once per launch; it latches itself off afterwards so a later
 // rebuild never re-covers a running app.
 //
-// The cover is a glyph and a word on the page background — nothing to decode,
-// nothing to buffer, no frame the launch waits on. It used to be a bundled
-// video, which put an asset load and a codec on the critical path of the one
-// moment the app is already slowest.
+// The cover is a small local vector mark and a word on the page background.
+// It used to be a bundled video, which put a media codec on the critical path
+// of the one moment the app is already slowest.
 
 import 'package:flutter/material.dart';
-import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../ui2.dart';
 
@@ -82,7 +80,7 @@ class _Cover extends StatelessWidget {
       color: p.bg,
       child: Center(
         child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Icon(LucideIcons.activity, size: 44, color: p.on(C.green)),
+          ExcludeSemantics(child: brandGlyph(kEdgeMarkAsset, size: S.tap)(p.ink)),
           const SizedBox(height: S.x4),
           Text('OpenStrap', style: F.t2.copyWith(color: p.ink)),
         ]),

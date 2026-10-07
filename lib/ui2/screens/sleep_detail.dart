@@ -166,6 +166,19 @@ String _pts(double v) => '${v.round()} points';
 String _rangeText(ana.StageInterval i) =>
     '${hm(i.loSec / 60)}–${hm(i.hiSec / 60)}';
 
+List<(String, String, Color)> sleepStageRows(BuildContext c, Map<String, dynamic> n) {
+  final l = AppLocalizations.of(c);
+  final r = _ranges(n);
+  final awake = n['awake_min'] as num?;
+  return <(String, String, Color)>[
+      if (r != null) (l?.sleepDetailDeep ?? 'Deep', _rangeText(r.deep), C.blue),
+      if (r != null) (l?.sleepDetailStageRem ?? 'REM', _rangeText(r.rem), C.teal),
+      if (r != null) (l?.sleepDetailLight ?? 'Light', _rangeText(r.light), C.sky),
+      if (awake != null)
+        (l?.sleepDetailStageAwake ?? 'Awake', hm(awake), C.orange),
+    ];
+}
+
 String _capitalise(String s) =>
     s.isEmpty ? s : s[0].toUpperCase() + s.substring(1);
 
@@ -241,6 +254,23 @@ class SleepData {
     ];
   }
 
+  static List<(List<SleepStage>?, int)> stageRuns(List<SleepStage?> st) {
+    final out = <(List<SleepStage>?, int)>[];
+    var i = 0;
+    while (i < st.length) {
+      var j = i;
+      while (j + 1 < st.length && (st[j + 1] == null) == (st[i] == null)) {
+        j++;
+      }
+      out.add(st[i] == null
+          ? (null, j - i + 1)
+          : (st.sublist(i, j + 1).cast<SleepStage>(), j - i + 1));
+      i = j + 1;
+    }
+    return out;
+  }
+
+
   static int _indexAt(List<int> ts, int t) {
     var lo = 0;
     for (var i = 0; i < ts.length; i++) {
@@ -270,7 +300,7 @@ class SleepData {
     return null;
   }
 
-  static Future<SleepData> load(LocalRepository repo, {String? want}) async {
+  static Future<SleepData> loadNight(LocalRepository repo, {String? want}) async {
     final today = await repo.getToday();
     // THE NIGHT `getToday` ACTUALLY SERVED. Home's Sleep card is that night, so
     // tapping it has to open that night. Resolving on `today_day` alone opened
@@ -287,6 +317,14 @@ class SleepData {
 
     final night = await repo.getDaySleepV2(day);
     final timeline = await repo.getDayTimeline(day);
+    return SleepData(day: day, days: days, night: night, timeline: timeline);
+  }
+
+  static Future<SleepData> load(LocalRepository repo, {String? want}) async {
+    final basic = await loadNight(repo, want: want);
+    final day = basic.day;
+    if (day == null) return basic;
+    final days = basic.days, night = basic.night, timeline = basic.timeline;
     final cd = await repo.getInsights();
     final coach = cd['sleep_coach'];
     final needEnv = coach is Map ? coach['need'] : null;
@@ -562,7 +600,7 @@ class _SleepDetailState extends State<SleepDetail> {
       // on last night — the same numbers every time, whichever day you
       // came from.
       investigateRow(
-          c, () => go(c, Investigate('sleep', day: _day ?? d.day))),
+          c, null, destination: Investigate('sleep', day: _day ?? d.day)),
     ]);
   }
 
@@ -943,21 +981,6 @@ class _SleepDetailState extends State<SleepDetail> {
   /// A gap is the only honest mark for "not a measurement". There is no fifth
   /// lane and there should not be one — a lane is a stage, and this is the
   /// absence of one.
-  static List<(List<SleepStage>?, int)> _runs(List<SleepStage?> st) {
-    final out = <(List<SleepStage>?, int)>[];
-    var i = 0;
-    while (i < st.length) {
-      var j = i;
-      while (j + 1 < st.length && (st[j + 1] == null) == (st[i] == null)) {
-        j++;
-      }
-      out.add(st[i] == null
-          ? (null, j - i + 1)
-          : (st.sublist(i, j + 1).cast<SleepStage>(), j - i + 1));
-      i = j + 1;
-    }
-    return out;
-  }
 
   /// A [Scrubber], not a drag gesture: what matters is where the pointer IS,
   /// and the 44 pt tap rule does not apply to a continuous readout. What DOES
@@ -993,7 +1016,7 @@ class _SleepDetailState extends State<SleepDetail> {
             // Every painter gets the same height, so the four lanes stay on the
             // same four lines across the whole night.
             Row(children: [
-              for (final (st, cols) in _runs(stages))
+              for (final (st, cols) in SleepData.stageRuns(stages))
                 Expanded(
                   flex: cols,
                   child: st == null
@@ -1151,14 +1174,7 @@ class _SleepDetailState extends State<SleepDetail> {
   Widget _stages(BuildContext c, P p, Map<String, dynamic> n) {
     final l = AppLocalizations.of(c);
     final r = _ranges(n);
-    final awake = n['awake_min'] as num?;
-    final rows = <(String, String, Color)>[
-      if (r != null) (l?.sleepDetailDeep ?? 'Deep', _rangeText(r.deep), C.blue),
-      if (r != null) (l?.sleepDetailStageRem ?? 'REM', _rangeText(r.rem), C.teal),
-      if (r != null) (l?.sleepDetailLight ?? 'Light', _rangeText(r.light), C.sky),
-      if (awake != null)
-        (l?.sleepDetailStageAwake ?? 'Awake', hm(awake), C.orange),
-    ];
+    final rows = sleepStageRows(c, n);
     if (rows.isEmpty) {
       return StatusCard(
         l?.sleepDetailNoStageSplitTitle ?? 'No stage split for this night',

@@ -10,6 +10,7 @@ const kGithubUrl = 'https://github.com/OpenStrap/edge';
 const kRedditUrl = 'https://www.reddit.com/r/OpenStrap/';
 const kDiscordUrl = 'https://discord.gg/dUXds5MWkd';
 const kSponsorUrl = 'https://github.com/sponsors/abdulsaheel';
+const kEdgeMarkAsset = 'assets/icons/edge.svg';
 
 /// Every link here is external — the browser/app the platform already picks
 /// for that URL scheme, never a WebView inside this app. Reports whether it
@@ -23,12 +24,13 @@ Future<bool> open3rdPartyLink(String url) async {
   }
 }
 
-/// A brand mark (assets/icons/*.svg — official, single-fill-path logos),
+/// A brand mark (assets/icons/*.svg — single-fill-path logos),
 /// tinted to match whatever accent its row is drawn in, same 16×16 as the
 /// Lucide glyph it sits beside everywhere else in that list.
-Widget Function(Color) brandGlyph(String asset) => (tint) => SvgPicture.asset(
+Widget Function(Color) brandGlyph(String asset, {double size = 16}) =>
+    (tint) => SvgPicture.asset(
       asset,
-      width: 16,
-      height: 16,
+      width: size,
+      height: size,
       colorFilter: ColorFilter.mode(tint, BlendMode.srcIn),
     );

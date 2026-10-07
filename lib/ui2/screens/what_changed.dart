@@ -31,7 +31,7 @@ import '../../data/local_repository.dart';
 import '../../l10n/app_localizations.dart';
 import '../ui2.dart';
 import 'day_timeline.dart' show DayTimelineScreen;
-import 'home_screen.dart' show go, repoOf;
+import 'home_screen.dart' show repoOf;
 import 'metric_detail.dart'
     show dayNavRow, detailLinkRow, detailScaffold, pickDay;
 import 'month_grid.dart';
@@ -232,7 +232,7 @@ List<Widget> whatChangedBody(BuildContext c, WhatChangedData d) {
         LucideIcons.listOrdered,
         l?.whatChangedDayLinkTitle ?? 'What happened that day',
         l?.whatChangedDayLinkSub ?? 'Sleep, sessions, meals and logs in time order',
-        () => go(c, DayTimelineScreen(day: d.day)),
+        null, destination: DayTimelineScreen(day: d.day),
       ),
     ],
     if (d.grid.isNotEmpty)

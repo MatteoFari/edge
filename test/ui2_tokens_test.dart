@@ -195,6 +195,12 @@ void main() {
 const _notComponents = {
   // shell and routing
   'AppShell', 'Domain', 'GalleryScreen',
+  // A route boundary owns a captured frame and Navigator lifecycle. Its
+  // forward/reverse behavior is covered by ui2_detail_transition_test.
+  'DetailLink',
+  // Paging owns controllers and retained page state; exercised in
+  // ui2_sub_pages_test and the domain swipe regressions.
+  'SubPages',
   // WHOOP MG ECG routes: the Heart Screener entry reads the database and
   // pushes; the capture screen owns a live BLE reading (a gallery case would
   // start one); the detail screen reads and deletes a reading and routes to
@@ -208,6 +214,9 @@ const _notComponents = {
   'ProfileSetupScreen', 'ProfileSetupView',
   // profile routes
   'ProfileHome', 'ProfileHomeView', 'MoreSettings', 'MoreSettingsView',
+  // The routed appearance sheet is exercised at full phone widths in
+  // ui2_interface_style_settings_test, including large text and failed saves.
+  'InterfaceStylePicker',
   'NotificationSettings', 'NotificationSettingsView', 'EditProfile',
   'EditProfileView', 'DataScreen', 'AlarmScreen', 'AlarmScreenView',
   'MyDevices', 'MyDevicesView', 'DeviceDetail', 'DeviceDetailView', 'RePair',

@@ -256,10 +256,12 @@ class _LogWorkoutState extends State<LogWorkout> {
       isScrollControlled: true,
       sheetAnimationStyle: sheetMotion(context),
       backgroundColor: P.of(context).card,
-      shape: const RoundedRectangleBorder(borderRadius: R.rXl),
+      shape: RoundedRectangleBorder(
+        borderRadius: P.of(context).expressive ? R.rXxl : R.rXl,
+      ),
       builder: (_) => const _TypeSheet(),
     );
-    if (picked != null) setState(() => _activity = picked);
+    if (mounted && picked != null) setState(() => _activity = picked);
   }
 
   Future<void> _save() async {

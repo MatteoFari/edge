@@ -34,7 +34,15 @@ class _Heights implements Canvas {
 }
 
 void main() {
-  final themes = {'light': const P(false), 'dark': const P(true)};
+  final themes = {
+    'light': const P(false), 'dark': const P(true),
+    'expressive light': const P(false, expressive: true),
+    'expressive dark': const P(true, expressive: true),
+    for (final palette in ExpressivePalette.values)
+      for (final dark in [false, true])
+        '${palette.name} ${dark ? 'dark' : 'light'}':
+            P(dark, expressive: true, palette: palette),
+  };
 
   // The tokens' own luminance/contrast maths, checked against the two anchors
   // everyone knows, so a bug in the metric can't quietly pass every other test

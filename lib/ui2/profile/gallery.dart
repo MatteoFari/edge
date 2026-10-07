@@ -61,6 +61,7 @@ import '../screens/screens.dart';
 import '../ui2.dart';
 import 'devices.dart';
 import 'profile.dart';
+import 'settings.dart' show ExpressivePalettePicker;
 
 /// A deterministic series — a gallery cannot depend on random data, and
 /// neither can a golden.
@@ -155,6 +156,8 @@ Map<String, Widget> galleryCases() => {...goldenCases(), ...extraCases()};
 /// because a PNG per case per theme per scale is a file somebody has to
 /// review — see the note at the bottom of the golden test.
 Map<String, Widget> goldenCases() => {
+      'expressive_palette_picker': ExpressivePalettePicker(
+          chosen: ExpressivePalette.freshMint, onPick: (_) {}),
       // The one number the whole app is judged by, and the picture the app
       // leaves someone else's phone. Both are photographed rather than merely
       // swept: they are the two components a regression would be noticed in
@@ -324,6 +327,8 @@ Map<String, Widget> goldenCases() => {
         onSelect: (_) {},
       ),
       'nav_bar': const NavBar('Last night', sub: 'MON 14 AUG'),
+      'home_expressive_header': ExpressiveHomeHeader(
+          day: _navDays[2], days: _navDays, onDay: (_) {}),
       // The stepper every single-day screen wears. Shot mid-history, where
       // both arrows are live and the middle opens the calendar — the state a
       // user spends all their time in once there is more than a week on disk.

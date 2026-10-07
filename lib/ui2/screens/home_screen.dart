@@ -29,9 +29,12 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart' as intl;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
+import '../../ble/ble_state.dart' show BandStatus, BandCondition;
+import '../../ble/band_status_l10n.dart' show localizedBandStatus;
 import '../../ai/briefing.dart'
     show Briefing, BriefingPeriod, BriefingStore, currentBriefingPeriod, resolveBriefingToShow;
 import '../../data/day_label.dart' show todayLabel, calendarDaysBetween;
@@ -43,13 +46,15 @@ import '../../data/local_repository.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/metric.dart';
 import '../../notify/notification_prefs.dart' show NotificationPrefs;
+import '../../state/alarm_schedule.dart'
+    show AlarmScheduleEntry, nextAlarmOccurrence;
 import '../../state/app_state.dart';
 import '../../state/clock_format.dart' show formatClockOf;
 import '../../state/units_controller.dart';
 import '../../theme/theme_switcher.dart' show themedRoute;
 import '../activity/day_strain.dart' show DayStrainDetail;
-import '../profile/alarm.dart' show AlarmArmState, alarmArmOf, alarmDoor;
-import '../profile/devices.dart' show formatDayTime;
+import '../profile/alarm.dart' show AlarmArmState, AlarmScreen, alarmArmOf, alarmDoor;
+import '../profile/devices.dart' show MyDevices, formatDayTime;
 import '../profile/profile.dart';
 import '../ui2.dart';
 import 'ai_briefing.dart' show AiBriefingScreen;
@@ -57,6 +62,7 @@ import 'coach.dart';
 import 'detected_activities.dart';
 import 'day_timeline.dart' show DayTimelineScreen;
 import 'metric_detail.dart';
+import 'home_metric_preview.dart';
 import 'readiness_detail.dart';
 import 'sleep_detail.dart';
 
@@ -65,7 +71,7 @@ import 'sleep_detail.dart';
 /// Page padding. The bottom inset clears the shell's floating nav.
 const pad = EdgeInsets.fromLTRB(S.x4, 0, S.x4, S.x16 + S.x8);
 
-/// Push a detail screen. Every drill-down in ui2 goes through here.
+/// Push from a plain control. Cards use DetailLink to expand from their surface.
 ///
 /// This was a raw `PageRouteBuilder` with its own fade+slide, which silently
 /// killed the iOS edge-swipe-back on all ~20 screens it pushes — a
@@ -428,10 +434,13 @@ List<double> valuesOf(List<ChartPoint> pts) => [for (final p in pts) p.v];
 /// four-day sync gap the newest point sat at the right-hand edge under the
 /// label "Today", and the line ran straight through the missing week as though
 /// it had been measured.
-List<double?> denseDays(List<ChartPoint> pts, int days) {
+List<double?> denseDays(List<ChartPoint> pts, int days, {DateTime? end}) {
   final out = List<double?>.filled(days, null);
   for (final p in pts) {
-    final behind = daysBehind(p.t);
+    final behind = end == null
+        ? daysBehind(p.t)
+        : calendarDaysBetween(
+            DateTime.fromMillisecondsSinceEpoch(p.t * 1000), end);
     if (behind == null || behind < 0 || behind >= days) continue;
     out[days - 1 - behind] = p.v;
   }
@@ -794,8 +803,15 @@ class RingTrio extends StatelessWidget {
   /// Push the ring's own screen. Null in a gallery, where there is no navigator
   /// worth pushing onto.
   final void Function(HomeRingKind)? onOpen;
+  final Widget Function(HomeRingKind)? detailBuilder;
 
-  const RingTrio({super.key, required this.d, this.onOpen});
+  final HomeRingKind? expanded;
+  final void Function(HomeRingKind)? onExpand;
+  final VoidCallback? onClose;
+  final String? day;
+
+  const RingTrio({super.key, required this.d, this.onOpen,
+    this.expanded, this.onExpand, this.onClose, this.day, this.detailBuilder});
 
   /// Whether ANY of the three has something to draw. When none do, the screen
   /// owes the user one written absence, not three empty circles.
@@ -807,6 +823,10 @@ class RingTrio extends StatelessWidget {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
     final rings = [for (final k in HomeRingKind.values) _ringOf(k, d, l)];
+    if (isExpressive(c)) {
+      return _ExpressiveMetrics(rings: rings, d: d, onOpen: onOpen,
+          expanded: expanded, onExpand: onExpand, onClose: onClose, day: day, detailBuilder: detailBuilder);
+    }
     final gaps = rings.where((r) => r.why != null).toList();
     // THERE IS NO "THESE TWO ARE FROM SATURDAY" LINE ANY MORE, and there is
     // nothing left for one to explain. Recovery and sleep used to be served
@@ -1171,6 +1191,683 @@ class _GapRow extends StatelessWidget {
   }
 }
 
+/// The same resolved states as the original trio, with recovery given the
+/// largest space. No metric is recomputed for this presentation.
+class _ExpressiveMetrics extends StatefulWidget {
+  final List<_RingState> rings;
+  final HomeData d;
+  final void Function(HomeRingKind)? onOpen, onExpand;
+  final HomeRingKind? expanded;
+  final VoidCallback? onClose;
+  final String? day;
+  final Widget Function(HomeRingKind)? detailBuilder;
+  const _ExpressiveMetrics({
+    required this.rings,
+    required this.d,
+    this.onOpen,
+    this.expanded,
+    this.onExpand,
+    this.onClose,
+    this.day,
+    this.detailBuilder,
+  });
+  @override
+  State<_ExpressiveMetrics> createState() => _ExpressiveMetricsState();
+}
+
+class _ExpressiveMetricsState extends State<_ExpressiveMetrics>
+    with SingleTickerProviderStateMixin {
+  final _region = GlobalKey();
+  final _expandedSurface = GlobalKey();
+  final _cards = {for (final k in HomeRingKind.values) k: GlobalKey()};
+  late final _controller =
+      AnimationController(vsync: this, duration: Motion.spatial)
+        ..addStatusListener((status) {
+          if (status == AnimationStatus.dismissed && mounted) {
+            setState(() => _visible = null);
+          }
+        });
+  HomeRingKind? _visible;
+  Rect? _origin;
+  Size? _size;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _controller.duration = motion(context, Motion.spatial);
+    if (!Motion.enabled(context) && _visible != null) {
+      _controller.value = widget.expanded == null ? 0 : 1;
+    }
+  }
+
+  @override
+  void didUpdateWidget(_ExpressiveMetrics old) {
+    super.didUpdateWidget(old);
+    if (old.expanded == widget.expanded) return;
+    if (widget.expanded == null) {
+      _controller.reverse();
+      return;
+    }
+    if (_visible == widget.expanded) {
+      _controller.forward();
+      return;
+    }
+    final region = _region.currentContext?.findRenderObject() as RenderBox?;
+    final card =
+        _cards[widget.expanded]?.currentContext?.findRenderObject()
+            as RenderBox?;
+    if (region == null || card == null || !region.hasSize || !card.hasSize) {
+      return;
+    }
+    _size = region.size;
+    _origin = card.localToGlobal(Offset.zero, ancestor: region) & card.size;
+    _visible = widget.expanded;
+    _controller.forward(from: 0);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  VoidCallback? _open(HomeRingKind kind) {
+    final open = widget.onExpand ?? widget.onOpen;
+    return open == null ? null : () => open(kind);
+  }
+
+  @override
+  Widget build(BuildContext c) => LayoutBuilder(
+    builder: (c, constraints) {
+      final p = P.of(c);
+      return AnimatedBuilder(
+        animation: _controller,
+        builder: (c, _) {
+          final t = Motion.spatialCurve(
+            c,
+          ).transform(_controller.value).clamp(0.0, 1.0);
+          final visible = _visible;
+          final r = visible == null
+              ? null
+              : widget.rings.firstWhere((r) => r.kind == visible);
+          final target = _size == null ? null : Offset.zero & _size!;
+          final rect = target == null || _origin == null
+              ? null
+              : Rect.lerp(_origin, target, t)!;
+          return Stack(
+            key: _region,
+            children: [
+              ConstrainedBox(
+                constraints: BoxConstraints(
+                  minHeight: constraints.maxWidth
+                      .clamp(0, S.x16 * 6)
+                      .toDouble(),
+                ),
+                child: IgnorePointer(
+                  ignoring: visible != null,
+                  child: ExcludeSemantics(
+                    excluding: visible != null,
+                    child: Opacity(opacity: 1 - t, child: _cardsLayout(c)),
+                  ),
+                ),
+              ),
+              if (r != null && rect != null)
+                Positioned.fromRect(
+                  rect: rect,
+                  child: ClipRRect(
+                    borderRadius: R.cardOf(c),
+                    child: Opacity(
+                      opacity: (t * 3).clamp(0.0, 1.0),
+                      child: RepaintBoundary(
+                        key: _expandedSurface,
+                        child: DecoratedBox(
+                          key: ValueKey('expanded-${r.kind.name}'),
+                          decoration: BoxDecoration(
+                            color: p.card,
+                            borderRadius: R.cardOf(c),
+                            border: Border.all(color: p.line),
+                          ),
+                          child: OverflowBox(
+                            alignment: Alignment.topLeft,
+                            minWidth: target!.width,
+                            maxWidth: target.width,
+                            minHeight: target.height,
+                            maxHeight: target.height,
+                            child: SizedBox.fromSize(
+                              size: target.size,
+                              child: Padding(
+                                padding: const EdgeInsets.all(S.x4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment:
+                                                CrossAxisAlignment.start,
+                                            children: [
+                                              Text(
+                                                r.label,
+                                                style: F.cap.copyWith(
+                                                  color: p.ink2,
+                                                ),
+                                              ),
+                                              Text(
+                                                r.value,
+                                                style: r.measured
+                                                    ? TextStyle.lerp(
+                                                        r.kind ==
+                                                                HomeRingKind
+                                                                    .recovery
+                                                            ? F.n48
+                                                            : F.n24,
+                                                        F.n34,
+                                                        t,
+                                                      )!.copyWith(color: p.ink)
+                                                    : F.head.copyWith(
+                                                        color: p.ink2,
+                                                      ),
+                                              ),
+                                              if (r.sub.isNotEmpty)
+                                                Text(
+                                                  r.sub,
+                                                  style: F.over.copyWith(
+                                                    color: p.ink3,
+                                                  ),
+                                                ),
+                                            ],
+                                          ),
+                                        ),
+                                        Pressable(
+                                          onTap: widget.onClose,
+                                          semanticLabel:
+                                              AppLocalizations.of(
+                                                c,
+                                              )?.homeMetricClose ??
+                                              'Close summary',
+                                          child: Icon(
+                                            LucideIcons.x,
+                                            size: S.x5,
+                                            color: p.ink2,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    const SizedBox(height: S.x3),
+                                    if (bigText(c)) _fullDetails(c, r),
+                                    Expanded(
+                                      child: Opacity(
+                                        opacity: ((t - .5) * 2).clamp(0.0, 1.0),
+                                        child: _MetricPreviewBody(
+                                          key: ValueKey(
+                                            '${r.kind.name}:${widget.day}',
+                                          ),
+                                          kind: r.kind,
+                                          day: widget.day ?? todayLabel(),
+                                        ),
+                                      ),
+                                    ),
+                                    if (!bigText(c)) _fullDetails(c, r),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          );
+        },
+      );
+    },
+  );
+
+  Widget _fullDetails(BuildContext c, _RingState r) {
+    final p = P.of(c);
+    Widget link(VoidCallback? tap) => Pressable(
+      onTap: tap,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Expanded(
+            child: Text(
+              AppLocalizations.of(c)?.homeMetricFullDetails ?? 'Full details',
+              style: F.cap.copyWith(color: p.on(r.arc(p))),
+            ),
+          ),
+          Icon(LucideIcons.arrowUpRight, size: S.x5, color: p.on(r.arc(p))),
+        ],
+      ),
+    );
+    final destination = widget.detailBuilder?.call(r.kind);
+    return destination == null
+        ? link(widget.onOpen == null ? null : () => widget.onOpen!(r.kind))
+        : DetailLink(
+            source: _expandedSurface,
+            builder: (open) => link(() => open<void>(destination)),
+          );
+  }
+
+  Widget _cardsLayout(BuildContext c) {
+    final recovery = widget.rings.firstWhere(
+      (r) => r.kind == HomeRingKind.recovery,
+    );
+    final sleep = widget.rings.firstWhere((r) => r.kind == HomeRingKind.sleep);
+    final strain = widget.rings.firstWhere(
+      (r) => r.kind == HomeRingKind.strain,
+    );
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    return Column(
+      children: [
+        KeyedSubtree(
+          key: _cards[recovery.kind],
+          child: _ExpressiveRecovery(recovery, onTap: _open(recovery.kind)),
+        ),
+        const SizedBox(height: S.x3),
+        LayoutBuilder(
+          builder: (c, box) {
+            final sleepCard = KeyedSubtree(
+              key: _cards[sleep.kind],
+              child: _ExpressiveMetric(sleep, onTap: _open(sleep.kind)),
+            );
+            final strainCard = KeyedSubtree(
+              key: _cards[strain.kind],
+              child: _ExpressiveMetric(strain, onTap: _open(strain.kind)),
+            );
+            // Durations and absence explanations need their full width at narrow
+            // sizes and at accessibility text sizes.
+            if (bigText(c) || box.maxWidth < 340) {
+              return Column(
+                children: [
+                  sleepCard,
+                  const SizedBox(height: S.x3),
+                  strainCard,
+                ],
+              );
+            }
+            return IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Expanded(child: sleepCard),
+                  const SizedBox(width: S.x3),
+                  Expanded(child: strainCard),
+                ],
+              ),
+            );
+          },
+        ),
+        if (widget.d.readiness.value != null &&
+            widget.d.drivers.isNotEmpty) ...[
+          const SizedBox(height: S.x2),
+          Pressable(
+            onTap: _open(HomeRingKind.recovery),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: S.x2,
+                vertical: S.x2,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    l?.homeWhyLabel ?? 'Why?',
+                    style: F.cap.copyWith(color: p.ink3),
+                  ),
+                  const SizedBox(width: S.x2),
+                  Expanded(
+                    child: Text(
+                      widget.d.drivers
+                          .take(3)
+                          .map((e) => driverLabel(e['label'], l))
+                          .join(' · '),
+                      style: F.cap.copyWith(color: p.ink2),
+                    ),
+                  ),
+                  Icon(LucideIcons.chevronRight, size: S.x4, color: p.ink3),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+class _MetricPreviewBody extends StatefulWidget {
+  final HomeRingKind kind;
+  final String day;
+  const _MetricPreviewBody({super.key, required this.kind, required this.day});
+  @override
+  State<_MetricPreviewBody> createState() => _MetricPreviewBodyState();
+}
+
+class _MetricPreviewBodyState extends State<_MetricPreviewBody>
+    with RevisionReload {
+  HomeMetricPreviewData? _data;
+  bool _failed = false;
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        _load();
+      }
+    });
+  }
+
+  @override
+  void reload() => _load();
+  Future<void> _load() async {
+    final token = beginRead(#preview);
+    final repo = repoOf(context);
+    setState(() {
+      _data = null;
+      _failed = false;
+    });
+    try {
+      final data = repo == null
+          ? HomeMetricPreviewData(day: widget.day)
+          : await HomeMetricPreviewData.load(repo, widget.kind, widget.day);
+      if (stillNewest(#preview, token)) setState(() => _data = data);
+    } catch (_) {
+      if (stillNewest(#preview, token)) setState(() => _failed = true);
+    }
+  }
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c), l = AppLocalizations.of(c);
+    if (_failed) {
+      return SingleChildScrollView(
+        child: StatusCard(
+          l?.homeMetricLoadFailed ?? 'Could not load this summary',
+          '',
+          fix: l?.homeMetricRetry ?? 'Retry',
+          onFix: _load,
+        ),
+      );
+    }
+    if (_data == null) {
+      return Center(child: CircularProgressIndicator(color: p.on(C.green)));
+    }
+    return SingleChildScrollView(
+      child: buildHomeMetricPreview(c, _data!, widget.kind),
+    );
+  }
+}
+
+class _ExpressiveRecovery extends StatelessWidget {
+  final _RingState r;
+  final VoidCallback? onTap;
+
+  const _ExpressiveRecovery(this.r, {this.onTap});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final text = _ExpressiveMetricText(r, hero: true);
+    final gauge = SizedBox(
+      width: S.x16 + S.x16,
+      height: S.x16 + S.x16,
+      child: RepaintBoundary(
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            CustomPaint(
+              size: Size.infinite,
+              painter: r.calibrating
+                  ? DashedRing(
+                      r.frac ?? 0,
+                      r.arc(p),
+                      p.track,
+                      stroke: S.x2,
+                      segments: r.need!,
+                    )
+                  : ExpressiveRecoveryGauge(r.frac, r.arc(p), p.track),
+            ),
+            Icon(r.icon, size: S.navIcon, color: r.ink(p)),
+          ],
+        ),
+      ),
+    );
+    return Surface(
+      key: const ValueKey('expressive-recovery'),
+      elevation: 2,
+      onTap: onTap,
+      semanticLabel: r.spoken,
+      child: ExcludeSemantics(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            LayoutBuilder(
+              builder: (c, box) {
+                if (bigText(c) || box.maxWidth < 280) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      text,
+                      const SizedBox(height: S.x3),
+                      Align(alignment: Alignment.center, child: gauge),
+                    ],
+                  );
+                }
+                return Row(
+                  children: [
+                    Expanded(child: text),
+                    const SizedBox(width: S.x3),
+                    gauge,
+                  ],
+                );
+              },
+            ),
+            if (r.why != null) ...[
+              const SizedBox(height: S.x3),
+              Text(r.why!, style: F.cap.copyWith(color: p.ink3)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpressiveMetric extends StatelessWidget {
+  final _RingState r;
+  final VoidCallback? onTap;
+
+  const _ExpressiveMetric(this.r, {this.onTap});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final sleep = r.kind == HomeRingKind.sleep;
+    return Surface(
+      key: ValueKey('expressive-${r.kind.name}'),
+      onTap: onTap,
+      semanticLabel: r.spoken,
+      child: ExcludeSemantics(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _ExpressiveMetricText(r),
+            const SizedBox(height: S.x3),
+            RepaintBoundary(
+              child: SizedBox(
+                height: sleep && !r.calibrating ? S.x6 : S.x12,
+                width: double.infinity,
+                child: CustomPaint(
+                  painter: r.calibrating
+                      // Calibration is not strain or sleep. Retain the measured
+                      // night/day count as a dashed dial, with its own text.
+                      ? null
+                      : sleep
+                      ? ExpressiveSleepMeter(r.frac, r.arc(p), p.track)
+                      : ExpressiveStrainSegments(r.frac, r.arc(p), p.track),
+                  child: r.calibrating
+                      ? Align(
+                          alignment: Alignment.centerLeft,
+                          child: SizedBox(
+                            width: S.x12,
+                            height: S.x12,
+                            child: CustomPaint(
+                              painter: DashedRing(
+                                r.frac ?? 0,
+                                r.arc(p),
+                                p.track,
+                                stroke: S.x1,
+                                segments: r.need!,
+                              ),
+                            ),
+                          ),
+                        )
+                      : null,
+                ),
+              ),
+            ),
+            if (r.why != null) ...[
+              const SizedBox(height: S.x3),
+              Text(r.why!, style: F.cap.copyWith(color: p.ink3)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpressiveMetricText extends StatelessWidget {
+  final _RingState r;
+  final bool hero;
+
+  const _ExpressiveMetricText(this.r, {this.hero = false});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(r.label.toUpperCase(), style: F.over.copyWith(color: p.ink3)),
+        const SizedBox(height: S.x2),
+        Text(
+          r.value,
+          style: r.measured
+              ? (hero ? F.n48 : F.n24).copyWith(color: p.ink)
+              : F.head.copyWith(color: p.ink2),
+        ),
+        if (r.sub.isNotEmpty) ...[
+          const SizedBox(height: S.x2),
+          Text(r.sub, style: F.cap.copyWith(color: p.ink2)),
+        ],
+      ],
+    );
+  }
+}
+
+/// Read-only snapshot independent of the derived day. Reading a schedule
+/// never arms it, and a computed occurrence cannot inherit an old arm's latch.
+({DateTime? at, AlarmArmState state, List<AlarmScheduleEntry> schedule})?
+_alarmSnapshotOf(BuildContext c) {
+  try {
+    return c.select<
+      AppState,
+      ({DateTime? at, AlarmArmState state, List<AlarmScheduleEntry> schedule})
+    >((app) {
+      final (at, state) = alarmArmOf(app);
+      return (at: at, state: state, schedule: app.alarmSchedule);
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
+Widget _expressiveAlarmCard(BuildContext c) {
+  final snapshot = _alarmSnapshotOf(c);
+  final now = DateTime.now();
+  final at = snapshot?.at;
+  final scheduled = nextAlarmOccurrence(snapshot?.schedule ?? const [], now);
+  final display = at ?? scheduled;
+  final state = snapshot?.state ?? AlarmArmState.none;
+  final p = P.of(c);
+  final l = AppLocalizations.of(c);
+  final past = at != null && !at.isAfter(now);
+  final status = past
+      ? (l?.alarmInThePast ??
+            'In the past — it has already fired or been missed')
+      : switch (at == null ? AlarmArmState.none : state) {
+          AlarmArmState.confirmed => l?.alarmStateConfirmed ?? 'Confirmed',
+          AlarmArmState.pending => l?.alarmStateWaiting ?? 'Waiting',
+          AlarmArmState.unknown => l?.alarmStateNotConfirmed ?? 'Not confirmed',
+          AlarmArmState.none => l?.alarmStateNotSet ?? 'Not set',
+        };
+  final time = display == null
+      ? (l?.alarmSetAnAlarm ?? 'Set an alarm')
+      : '${weekdayShortName(display.weekday, l)} ${formatClockOf(display)}';
+  final title = l?.alarmNavTitle ?? 'Alarm';
+  final scheduleLabel = at == null && scheduled != null
+      ? (l?.alarmScheduleGroup ?? 'Weekly schedule')
+      : null;
+  final color = !past && at != null && state == AlarmArmState.confirmed
+      ? C.green
+      : C.blue;
+  return Surface(
+    key: const ValueKey('home-next-alarm'),
+    destination: const AlarmScreen(),
+    semanticLabel: '$title. $time. $status'
+        '${scheduleLabel == null ? '' : '. $scheduleLabel'}',
+    child: ExcludeSemantics(
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(S.x3),
+            decoration: BoxDecoration(
+              color: p.wash(color),
+              borderRadius: R.rPill,
+            ),
+            child: Icon(
+              LucideIcons.alarmClock,
+              size: S.navIcon,
+              color: p.on(color),
+            ),
+          ),
+          const SizedBox(width: S.x3),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: F.over.copyWith(color: p.ink3)),
+                const SizedBox(height: S.x1),
+                Text(time, style: F.head.copyWith(color: p.ink)),
+                const SizedBox(height: S.x1),
+                Text(status, style: F.cap.copyWith(color: p.ink2)),
+                if (scheduleLabel != null) ...[
+                  const SizedBox(height: S.x1),
+                  Text(
+                    scheduleLabel,
+                    style: F.cap.copyWith(color: p.ink3),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(width: S.x2),
+          Icon(LucideIcons.chevronRight, size: S.x4, color: p.ink3),
+        ],
+      ),
+    ),
+  );
+}
+
 // ═══════════════════ the screen ═══════════════════
 
 class HomeData {
@@ -1381,6 +2078,463 @@ class HomeData {
   }
 }
 
+/// The sync frontier and day picker share the same header on loaded and empty
+/// days. A quiet radio is not proof that a backlog has finished transferring.
+class ExpressiveHomeHeader extends StatelessWidget {
+  final String day;
+  final List<String> days;
+  final ValueChanged<String> onDay;
+
+  const ExpressiveHomeHeader({
+    super.key,
+    required this.day,
+    required this.days,
+    required this.onDay,
+  });
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    final syncing = syncingNowOf(c);
+    final deriving = derivingOf(c);
+    final at = lastDataAtOf(c);
+    String? connection;
+    BandStatus? fault;
+    try {
+      connection = c.select<AppState, String>((a) => a.status);
+      final condition = c.select<AppState, BandCondition>(
+        (a) => a.engine.bandStatus.condition,
+      );
+      final status = c.read<AppState>().engine.bandStatus;
+      if (status.condition == condition && status.isFault) {
+        fault = localizedBandStatus(c, status);
+      }
+    } catch (_) {
+      // The gallery has no band state.
+    }
+    final connecting =
+        connection == 'connecting' ||
+        connection == 'reconnecting' ||
+        connection == 'scanning';
+    final busy = fault == null && (syncing || deriving || connecting);
+    final label = fault != null
+        ? (l?.homeHeaderSyncIssue ?? 'Sync issue')
+        : syncing
+        ? (l?.devicesSyncing ?? 'Syncing')
+        : deriving
+        ? (l?.homeHeaderProcessing ?? 'Processing')
+        : connecting
+        ? (l?.bandStatusConnectingTitle ?? 'Connecting')
+        : null;
+    final saved = syncedThroughLabel(at, day, l);
+    final description = fault != null
+        ? '${fault.title}. ${fault.reason}. $saved'
+        : busy
+        ? '$label. $saved'
+        : saved;
+    final coach = coachReady(c);
+    final accent = fault != null
+        ? C.red
+        : syncing || connecting
+        ? C.blue
+        : deriving
+        ? C.purple
+        : at != null
+        ? C.green
+        : C.orange;
+    final date = DateTime.tryParse(day);
+    final numericDay = date == null
+        ? ''
+        : date.year == DateTime.now().year
+        ? intl.DateFormat.Md(
+            l?.localeName ?? Localizations.localeOf(c).toString(),
+          ).format(date)
+        : MaterialLocalizations.of(c).formatCompactDate(date);
+
+    Widget action(IconData icon, String label, Color accent, Widget screen) =>
+        Pressable(
+          semanticLabel: label,
+          onTap: () => go(c, screen),
+          child: Container(
+            width: S.tap,
+            height: S.tap,
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: p.fill(accent),
+            ),
+            child: Icon(icon, size: S.x5, color: p.inkOnFill),
+          ),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.only(top: S.x3, bottom: S.x5),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LayoutBuilder(
+            builder: (c, box) {
+              final actionsWidth = coach ? S.tap * 2 + S.x2 : S.tap;
+              final dateStyle = F.head.copyWith(color: p.ink);
+              double textWidth(String text, TextStyle style) {
+                final painter = TextPainter(
+                  text: TextSpan(
+                    text: text,
+                    style: DefaultTextStyle.of(c).style.merge(style),
+                  ),
+                  textDirection: Directionality.of(c),
+                  textScaler: MediaQuery.textScalerOf(c),
+                  locale: Localizations.localeOf(c),
+                  maxLines: 1,
+                )..layout();
+                final width = painter.width.ceilToDouble();
+                painter.dispose();
+                return width;
+              }
+
+              final dateWidth =
+                  textWidth(numericDay, dateStyle) +
+                  (days.isEmpty ? 0 : S.x1 + S.x4);
+              final syncWidth = label == null
+                  ? S.tap
+                  : S.tap +
+                        S.x3 +
+                        textWidth(
+                          label,
+                          F.cap.copyWith(fontWeight: FontWeight.w600),
+                        );
+              // Keep full-sized, single-line labels. At accessibility sizes,
+              // the date gets its own row rather than shrinking the type.
+              final stacked =
+                  label != null &&
+                  dateWidth + syncWidth + actionsWidth + S.x4 > box.maxWidth;
+              final maxSyncWidth =
+                  (box.maxWidth -
+                          actionsWidth -
+                          (stacked ? S.x2 : S.x4 + dateWidth))
+                      .clamp(S.tap, box.maxWidth)
+                      .toDouble();
+              final displayDay = label == null ? prettyDay(day, l) : numericDay;
+              // Decide wrapping from the resting layout. A returning written
+              // date must not briefly become two lines as the pill shrinks.
+              final wrapDate =
+                  textWidth(prettyDay(day, l), dateStyle) >
+                  box.maxWidth -
+                      actionsWidth -
+                      S.tap -
+                      S.x4 -
+                      (days.isEmpty ? 0 : S.x1 + S.x4);
+              final dateTransition = AnimatedSwitcher(
+                duration: motion(c, Motion.slow),
+                switchInCurve: Motion.effectsCurve(c),
+                switchOutCurve: Motion.effectsCurve(c),
+                transitionBuilder: (child, animation) => FadeTransition(
+                  opacity: animation,
+                  child: SlideTransition(
+                    position: Tween(
+                      begin: const Offset(0, .08),
+                      end: Offset.zero,
+                    ).animate(animation),
+                    child: child,
+                  ),
+                ),
+                // Outgoing text keeps its natural width while fading.
+                // Only the new date determines the target size, so
+                // the chevron moves with it instead of jumping later.
+                layoutBuilder: (current, previous) => Stack(
+                  alignment: AlignmentDirectional.centerStart,
+                  clipBehavior: Clip.none,
+                  children: [
+                    for (final child in previous)
+                      PositionedDirectional(start: 0, top: 0, child: child),
+                    ?current,
+                  ],
+                ),
+                child: Text(
+                  displayDay,
+                  key: ValueKey(displayDay),
+                  style: dateStyle,
+                  maxLines: label == null && wrapDate ? 2 : 1,
+                  softWrap: label == null && wrapDate,
+                  overflow: TextOverflow.clip,
+                ),
+              );
+              final dateControl = Pressable(
+                key: const ValueKey('home-day-picker'),
+                semanticLabel:
+                    l?.metricDetailChooseDayShowing(prettyDay(day, l)) ??
+                    'Choose a day. Showing ${prettyDay(day, l)}',
+                onTap: days.isEmpty
+                    ? null
+                    : () async {
+                        final picked = await chooseDay(c, days, day);
+                        if (c.mounted && picked != null && picked != day) {
+                          onDay(picked);
+                        }
+                      },
+                child: Row(
+                  children: [
+                    Flexible(
+                      child: Motion.enabled(c)
+                          ? AnimatedSize(
+                              key: const ValueKey('home-day-label-size'),
+                              duration: Motion.spatial,
+                              curve: Motion.spatialCurve(c),
+                              alignment: AlignmentDirectional.centerStart,
+                              child: dateTransition,
+                            )
+                          : dateTransition,
+                    ),
+                    if (days.isNotEmpty) ...[
+                      const SizedBox(width: S.x1),
+                      Icon(LucideIcons.chevronDown, size: S.x4, color: p.ink3),
+                    ],
+                  ],
+                ),
+              );
+              return ConstrainedBox(
+                constraints: const BoxConstraints(minHeight: S.x16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    if (stacked) ...[dateControl, const SizedBox(height: S.x2)],
+                    Row(
+                      children: [
+                        if (!stacked) ...[
+                          Expanded(child: dateControl),
+                          const SizedBox(width: S.x2),
+                        ],
+                        _HomeSyncControl(
+                          label: label,
+                          description: description,
+                          busy: busy,
+                          fault: fault != null,
+                          hasData: at != null,
+                          accent: accent,
+                          maxWidth: maxSyncWidth,
+                        ),
+                        if (stacked) const Spacer(),
+                        const SizedBox(width: S.x2),
+                        if (coach) ...[
+                          action(
+                            LucideIcons.sparkles,
+                            l?.homeAskCoach ?? 'Ask the coach',
+                            kCoachAccent,
+                            const CoachScreen(),
+                          ),
+                          const SizedBox(width: S.x2),
+                        ],
+                        action(
+                          LucideIcons.settings,
+                          l?.homeProfileSettings ?? 'Profile and settings',
+                          C.domHome,
+                          const ProfileHome(),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+          if (batteryLine(c) case final battery?) ...[
+            const SizedBox(height: S.x2),
+            battery,
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// One surface changes between a circle and a labelled pill. The full stored
+/// frontier remains available even when the quiet state has no visible text.
+class _HomeSyncControl extends StatelessWidget {
+  final String? label;
+  final String description;
+  final bool busy, fault, hasData;
+  final Color accent;
+  final double maxWidth;
+  const _HomeSyncControl({
+    this.label,
+    required this.description,
+    required this.busy,
+    required this.fault,
+    required this.hasData,
+    required this.accent,
+    required this.maxWidth,
+  });
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final ink = p.on(accent);
+    // Measure the same inherited typography that Text will render. Material's
+    // letter spacing otherwise makes the measured word narrower on Android.
+    final style = DefaultTextStyle.of(c).style
+        .merge(F.cap.copyWith(color: ink, fontWeight: FontWeight.w600))
+        .copyWith(inherit: false);
+    final text = TextPainter(
+      text: TextSpan(text: label ?? '', style: style),
+      textDirection: Directionality.of(c),
+      textScaler: MediaQuery.textScalerOf(c),
+      locale: Localizations.localeOf(c),
+      maxLines: 1,
+    )..layout();
+    final width = label == null
+        ? S.tap
+        : (S.tap + text.width.ceilToDouble() + S.x3)
+              .clamp(S.tap, maxWidth)
+              .toDouble();
+    // Keep room for glyph bearings/letter spacing beyond the advance width.
+    final labelWidth = (width - S.tap - S.x2).clamp(0, maxWidth).toDouble();
+    final wrap = label != null && text.width > labelWidth;
+    if (wrap) {
+      text.maxLines = null;
+      text.layout(maxWidth: labelWidth);
+    }
+    final textHeight = text.height;
+    final height = label == null
+        ? S.tap
+        : (textHeight + S.x4).clamp(S.tap, double.infinity).toDouble();
+    text.dispose();
+
+    return Tooltip(
+      message: description,
+      excludeFromSemantics: true,
+      child: Semantics(
+        liveRegion: true,
+        child: Pressable(
+          key: const ValueKey('home-sync-status'),
+          semanticLabel: description,
+          onTap: () => go(c, const MyDevices()),
+          child: ExcludeSemantics(
+            child: TweenAnimationBuilder<Color?>(
+              tween: ColorTween(begin: ink, end: ink),
+              duration: motion(c, Motion.slow),
+              curve: Motion.effectsCurve(c),
+              builder: (c, color, _) {
+                final icon = AnimatedSwitcher(
+                  duration: motion(c, Motion.base),
+                  switchInCurve: Motion.effectsCurve(c),
+                  switchOutCurve: Motion.effectsCurve(c),
+                  child: busy && Motion.enabled(c)
+                      ? SizedBox(
+                          key: const ValueKey('sync-spinner'),
+                          width: S.x5,
+                          height: S.x5,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: color,
+                          ),
+                        )
+                      : Icon(
+                          fault
+                              ? LucideIcons.circleAlert
+                              : busy
+                              ? LucideIcons.refreshCw
+                              : hasData
+                              ? LucideIcons.check
+                              : LucideIcons.watch,
+                          key: ValueKey((busy, fault, hasData)),
+                          size: S.x5,
+                          color: color,
+                        ),
+                );
+                return TweenAnimationBuilder<Size?>(
+                  tween: SizeTween(
+                    begin: const Size(S.tap, S.tap),
+                    end: Size(width, height),
+                  ),
+                  duration: motion(c, Motion.spatial),
+                  curve: Motion.spatialCurve(c),
+                  builder: (c, size, _) {
+                    final surfaceWidth = size!.width.clamp(S.tap, maxWidth);
+                    // Fade the word in once it fits inside the growing pill.
+                    final fits =
+                        surfaceWidth - S.tap - 2 >= labelWidth &&
+                        size.height - 2 >= textHeight;
+                    return ClipRRect(
+                      borderRadius: R.rPill,
+                      child: SizedBox(
+                        key: const ValueKey('home-sync-surface'),
+                        width: surfaceWidth,
+                        height: size.height.clamp(S.tap, double.infinity),
+                        child: AnimatedContainer(
+                          key: const ValueKey('home-sync-fill'),
+                          duration: motion(c, Motion.slow),
+                          curve: Motion.effectsCurve(c),
+                          decoration: BoxDecoration(
+                            color: Color.alphaBlend(p.wash(accent), p.card2),
+                            borderRadius: R.rPill,
+                            border: Border.all(color: p.line),
+                          ),
+                          child: Stack(
+                            children: [
+                              Positioned(
+                                left: 0,
+                                top: 0,
+                                bottom: 0,
+                                width: S.tap,
+                                child: Center(child: icon),
+                              ),
+                              // Lay the word out at its final width and reveal it
+                              // with the surface. Intermediate widths never reflow
+                              // its last letter onto another line.
+                              Positioned(
+                                left: S.tap,
+                                top: 0,
+                                bottom: 0,
+                                width: maxWidth,
+                                child: AnimatedOpacity(
+                                  opacity: label != null && fits ? 1 : 0,
+                                  duration: motion(c, Motion.fast),
+                                  curve: Motion.effectsCurve(c),
+                                  child: OverflowBox(
+                                    alignment: AlignmentDirectional.centerStart,
+                                    minWidth: 0,
+                                    maxWidth: double.infinity,
+                                    child: AnimatedSwitcher(
+                                      duration: motion(c, Motion.base),
+                                      switchInCurve: Motion.effectsCurve(c),
+                                      switchOutCurve: Motion.effectsCurve(c),
+                                      child: label == null
+                                          ? const SizedBox.shrink()
+                                          : SizedBox(
+                                              key: ValueKey(label),
+                                              width: labelWidth,
+                                              child: Text(
+                                                label!,
+                                                maxLines: wrap ? null : 1,
+                                                softWrap: wrap,
+                                                overflow: TextOverflow.clip,
+                                                style: style.copyWith(
+                                                  color: color,
+                                                ),
+                                              ),
+                                            ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class HomeScreen extends StatefulWidget {
   /// Injected only by goldens; production always loads.
   final HomeData? data;
@@ -1403,6 +2557,8 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with RevisionReload {
   HomeData? _d;
+  HomeRingKind? _expanded;
+  final _metricGroup = GlobalKey();
   bool _loading = true;
 
   /// The day requested by the switcher, or null for "today" — the same
@@ -1455,6 +2611,12 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (!isExpressive(context)) _expanded = null;
+  }
+
   /// Handed its data (golden, gallery) — the screen just renders what it has.
   @override
   bool get revisionReloads => widget.data == null;
@@ -1488,11 +2650,23 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
     }
   }
 
+  void _expandMetric(HomeRingKind kind) {
+    setState(() => _expanded = kind);
+    final group = _metricGroup.currentContext;
+    if (group != null) {
+      // At large text sizes the tapped lower card may have scrolled past the
+      // group's header. Keep its Close and Full details controls reachable.
+      unawaited(Scrollable.ensureVisible(group,
+          alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtStart));
+    }
+  }
+
   /// Another day. The switcher never strands you off the record — [DayNav]
   /// already restricts the arrows to [_days] — so this just re-loads for it.
   void _goDay(String day) {
     setState(() {
       _day = day;
+      _expanded = null;
       _loading = true;
     });
     _load();
@@ -1613,10 +2787,15 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
     final d = _d;
+    final expressive = isExpressive(c);
     final g = _greeting(widget.hour ?? DateTime.now().hour, l);
 
     if (d == null) {
-      return _refreshable(ListView(padding: pad, children: [
+      return _refreshable(ListView(padding: shellScrollPadding(c, pad), children: [
+        if (expressive)
+          ExpressiveHomeHeader(day: _day ?? todayLabel(), days: _days,
+              onDay: _goDay)
+        else ...[
         const SizedBox(height: S.x8),
         // No day on screen ⇒ no `todayId`, so this renders the dated form.
         // Shown here TOO: a first run, a failed read and a sync in flight are
@@ -1630,7 +2809,8 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
           Align(alignment: Alignment.centerLeft, child: battery),
         ],
         const SizedBox(height: S.x3),
-        const DetectedActivitiesCard(),
+        ],
+        if (!expressive) const DetectedActivitiesCard(),
         if (_loading)
           const Center(child: CircularProgressIndicator())
         else if (_failed)
@@ -1660,11 +2840,19 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
             );
           }),
         // The alarm lives on AppState too, so a load failure must not hide it.
-        if (_day == null || _day == todayLabel())
-          if (alarmArmOfContext(c) case final (DateTime?, AlarmArmState) a) ...[
+        if (_day == null || _day == todayLabel()) ...[
+          if (expressive) ...[
+            const SizedBox(height: S.x3),
+            _expressiveAlarmCard(c),
+          ] else if (alarmArmOfContext(c) case final (DateTime?, AlarmArmState) a) ...[
             const SizedBox(height: S.x3),
             alarmDoor(c, a.$1, a.$2),
           ],
+        ],
+        if (expressive) ...[
+          const SizedBox(height: S.x3),
+          const DetectedActivitiesCard(),
+        ],
       ]));
     }
 
@@ -1689,13 +2877,19 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
     // gates the plan/live-workout copy below, which is about what to DO
     // today and reads as a stale instruction on a day already in the past.
     final isToday = _day == null || _day == todayLabel();
+    Widget metricDetail(HomeRingKind kind) => switch (kind) {
+      HomeRingKind.recovery => ReadinessDetail(day: _day),
+      HomeRingKind.strain => DayStrainDetail(day: _day),
+      HomeRingKind.sleep => SleepDetail(day: isToday ? null : _day),
+    };
+
 
     final stale = staleInsightsCard(d.insightsStale, syncOf(c), l);
-    // Above the greeting, not below it: if the app had to rebuild the database
+    // Above the header, not below it: if the app had to rebuild the database
     // to start, that outranks anything else this screen has to say today.
     final rebuilt = dbRebuiltCard(dbRebuildOf(c), l);
 
-    return _refreshable(ListView(padding: pad, children: [
+    return _refreshable(ListView(padding: shellScrollPadding(c, pad), children: [
       if (rebuilt != null) ...[const SizedBox(height: S.x3), rebuilt],
 
       // ── the one observation Home is allowed to make ──
@@ -1708,7 +2902,11 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
       // state on a morning whose own bundle has not derived yet, which is
       // exactly the morning you would most want to be told.
       ...?_bodyWatch(c, d),
-      // ── greeting ──
+      // ── day and sync status ──
+      if (expressive)
+        ExpressiveHomeHeader(day: _day ?? d.dayId ?? todayLabel(), days: _days,
+            onDay: _goDay)
+      else
       Padding(
         padding: const EdgeInsets.only(top: S.x3, bottom: S.x5),
         child: Row(children: [
@@ -1782,10 +2980,10 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
         ]),
       ),
 
-      if (bare) ...[
+      if (bare && !expressive) ...[
         const DetectedActivitiesCard(),
       ],
-      ...dayNavRow(_day ?? d.dayId, _days, _goDay),
+      if (!expressive) ...dayNavRow(_day ?? d.dayId, _days, _goDay),
 
       if (bare)
         // A live workout holds derivation, so a bare day with a session open
@@ -1809,18 +3007,14 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
         // diagnostics on Home makes the app read as broken.
         if (RingTrio.has(d))
           RingTrio(
+            key: _metricGroup,
             d: d,
-            onOpen: (k) => go(
-                c,
-                switch (k) {
-                  HomeRingKind.recovery => const ReadinessDetail(),
-                  HomeRingKind.strain => const DayStrainDetail(),
-                  // The night the ring was drawn from, not last night. Today
-                  // stays null even after the switcher steps back onto it:
-                  // today's ring is the held-over night, and only the default
-                  // pick resolves to that one.
-                  HomeRingKind.sleep => SleepDetail(day: isToday ? null : _day),
-                }),
+            expanded: _expanded,
+            day: _day ?? d.dayId ?? todayLabel(),
+            onExpand: expressive ? _expandMetric : null,
+            onClose: () => setState(() => _expanded = null),
+            onOpen: (k) => go(c, metricDetail(k)),
+            detailBuilder: metricDetail,
           )
         else
           Builder(builder: (c) {
@@ -1850,10 +3044,14 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
                       (l?.homeReadinessNoReason ?? 'Nothing recorded says why.'),
               fix: l?.homeSeeWhatWasMissing ?? 'See what was missing',
               icon: LucideIcons.batteryCharging,
-              onFix: () => go(c, const ReadinessDetail()),
+              destination: const ReadinessDetail(),
             );
           }),
 
+        if (expressive && isToday) ...[
+          const SizedBox(height: S.x3),
+          _expressiveAlarmCard(c),
+        ],
         const SizedBox(height: S.x3),
         const DetectedActivitiesCard(),
         const CommunityNudge(),
@@ -1881,11 +3079,19 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
         detailLinkRow(c, LucideIcons.chartGantt,
             l?.homeBreakdownTitle ?? 'Breakdown of your day',
             l?.homeBreakdownSubtitle ?? 'Hour by hour',
-            () => go(c, DayTimelineScreen(day: _day))),
+            null, destination: DayTimelineScreen(day: _day)),
       ],
 
       // ── the next alarm: a door, same as the one above ──
-      if (isToday)
+      if (bare && expressive) ...[
+        if (isToday) ...[
+          const SizedBox(height: S.x3),
+          _expressiveAlarmCard(c),
+        ],
+        const SizedBox(height: S.x3),
+        const DetectedActivitiesCard(),
+      ],
+      if (isToday && !expressive)
         if (alarmArmOfContext(c) case final (DateTime?, AlarmArmState) a) ...[
           const SizedBox(height: S.x3),
           alarmDoor(c, a.$1, a.$2),
@@ -1939,7 +3145,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
                     'This reads one signal. It names a pattern, and it does not name '
                     'a cause.')),
         advice: l?.homeIllnessAdvice ?? 'Worth noting if it continues past a couple of days.',
-        onTap: () => go(c, const MetricDetail('resting_hr')),
+        destination: const MetricDetail('resting_hr'),
       ),
       const SizedBox(height: S.x3),
     ];
@@ -1948,8 +3154,17 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
   /// Pull to reload. The screen also reloads itself on `insightsRevision`, but
   /// a derive that fails silently, an import, or anything that lands without
   /// bumping it still leaves the user a way to ask.
-  Widget _refreshable(Widget list) =>
-      RefreshIndicator(onRefresh: _load, child: list);
+  Widget _refreshable(Widget list) => PopScope(
+    canPop: _expanded == null || !isExpressive(context),
+    onPopInvokedWithResult: (didPop, _) {
+      if (!didPop && _expanded != null) setState(() => _expanded = null);
+    },
+    child: NotificationListener<ScrollStartNotification>(onNotification: (n) {
+      if (_expanded != null && n.depth == 0 && n.dragDetails != null &&
+          n.metrics.axis == Axis.vertical) { setState(() => _expanded = null); }
+      return false;
+    }, child: RefreshIndicator(onRefresh: _load, child: list)),
+  );
 
   Widget _glance(BuildContext c, HomeData d) {
     final l = AppLocalizations.of(c);
@@ -1980,7 +3195,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
           '${d.rhr.value!.round()}',
           unit: 'bpm',
           sub: l?.homeRestingSub ?? 'Resting',
-          onTap: () => go(c, const MetricDetail('resting_hr'))),
+          destination: const MetricDetail('resting_hr')),
       // "no sleep was recorded" was stated as fact, unconditionally — and it
       // was rendered directly beside a Sleep card showing that night's
       // duration. Sleep duration and nocturnal RHR are gated separately: a
@@ -2020,7 +3235,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
                     '${((d.steps.value! / d.stepGoal) * 100).clamp(0, 999).round()}% of goal',
               ?stepSensorLabel(d.steps, l),
             ].join(' · '),
-      onTap: () => go(c, const MetricDetail('steps')),
+      destination: const MetricDetail('steps'),
       trailing: d.steps.value == null || d.stepGoal <= 0
           ? null
           : SizedBox(
@@ -2042,7 +3257,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
               ? (l?.homeCaloriesEstimated ?? 'Estimated')
               : (l?.homeCaloriesTotal(thousands(d.caloriesTotal.value)) ??
                   '${thousands(d.caloriesTotal.value)} total'),
-          onTap: () => go(c, const MetricDetail('calories'))),
+          destination: const MetricDetail('calories')),
       // No `why:`. It said "Needs your weight and age" — and the measured run
       // printed that to a profile carrying both, because energy had gone absent
       // for an entirely different reason that the card never asked for.
@@ -2191,7 +3406,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
       LucideIcons.sparkles,
       l?.homeBriefingTitle ?? 'Briefing',
       cached?.oneLiner ?? (l?.homeBriefingSubtitleEmpty ?? 'Tap to write today\'s summary'),
-      () async {
+      null, onNavigate: (open) async {
         // Resolved fresh at tap time via _resolveBriefingNow, not read from
         // the value above — see that method's doc for why.
         //
@@ -2202,8 +3417,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
         // written during the visit instead of showing stale/empty text until
         // some UNRELATED revision bump happens to refresh Home.
         final screen = AiBriefingScreen(period: _resolveBriefingNow(d).period);
-        await Navigator.of(c).push(
-            themedRoute<void>((_) => screen, name: screen.runtimeType.toString()));
+        await open<void>(screen);
         if (mounted) reload();
       },
     );

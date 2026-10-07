@@ -30,7 +30,7 @@ import '../../l10n/app_localizations.dart';
 import '../../state/alarm_schedule.dart';
 import '../../state/app_state.dart';
 import '../../state/clock_format.dart' show formatClock;
-import '../screens/home_screen.dart' show go, weekdayShortName;
+import '../screens/home_screen.dart' show weekdayShortName;
 import '../screens/metric_detail.dart' show detailLinkRow;
 import '../ui2.dart';
 import 'profile.dart' show SetRow, settingsGroup;
@@ -88,7 +88,7 @@ Widget alarmDoor(BuildContext c, DateTime? at, AlarmArmState state,
     sub = '${AlarmScreenView._dayAndTime(c, at)} · $what';
   }
   return detailLinkRow(c, LucideIcons.alarmClock, l?.alarmNavTitle ?? 'Alarm',
-      sub, () => go(c, const AlarmScreen()));
+      sub, null, destination: const AlarmScreen());
 }
 
 class AlarmScreen extends StatelessWidget {

@@ -253,7 +253,13 @@ class ActivityProposalCard extends StatelessWidget {
             spacing: S.x4,
             runSpacing: S.x2,
             children: [
-              _action(c, l?.activityConfirm ?? 'Confirm', onConfirm, accent),
+              _action(
+                c,
+                l?.activityConfirm ?? 'Confirm',
+                onConfirm,
+                accent,
+                primary: true,
+              ),
               _action(c, l?.activityEdit ?? 'Edit', onEdit, accent),
               _action(c, l?.activityDiscard ?? 'Discard', onDiscard, C.red),
             ],
@@ -267,20 +273,32 @@ class ActivityProposalCard extends StatelessWidget {
     BuildContext c,
     String label,
     VoidCallback? tap,
-    Color accent,
-  ) => Pressable(
-    onTap: tap,
-    child: Padding(
-      padding: const EdgeInsets.symmetric(horizontal: S.x2),
-      child: Text(
-        label,
-        style: F.body.copyWith(
-          color: P.of(c).on(accent),
-          fontWeight: FontWeight.w600,
+    Color accent, {
+    bool primary = false,
+  }) {
+    final p = P.of(c);
+    return Pressable(
+      onTap: tap,
+      child: Container(
+        padding: p.expressive
+            ? const EdgeInsets.symmetric(horizontal: S.x4, vertical: S.x2)
+            : const EdgeInsets.symmetric(horizontal: S.x2),
+        decoration: p.expressive
+            ? BoxDecoration(
+                color: primary ? p.fill(accent) : p.wash(accent),
+                borderRadius: R.rPill,
+              )
+            : null,
+        child: Text(
+          label,
+          style: F.body.copyWith(
+            color: p.expressive && primary ? p.inkOnFill : p.on(accent),
+            fontWeight: FontWeight.w600,
+          ),
         ),
       ),
-    ),
-  );
+    );
+  }
 }
 
 class DetectedActivitiesCard extends StatefulWidget {
@@ -340,7 +358,7 @@ class _DetectedActivitiesCardState extends State<DetectedActivitiesCard>
         l?.activityReview ?? 'Review',
         LucideIcons.radar,
         C.domHome,
-        onTap: () => go(c, const DetectedActivitiesScreen()),
+        destination: const DetectedActivitiesScreen(),
       ),
     );
   }

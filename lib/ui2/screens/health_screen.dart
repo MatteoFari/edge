@@ -482,7 +482,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
         l?.healthTabVitals ?? 'Vitals',
         l?.healthTabLabs ?? 'Labs',
       ];
-  late int _tab = widget.tab;
+  late int _tab = widget.tab.clamp(0, 4);
 
   HealthData? _d;
   VitalsData? _v;
@@ -613,35 +613,69 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
     }
   }
 
-  void _select(int i) {
-    setState(() => _tab = i);
+  void _activate(int i) {
+    if (_tab != i) setState(() => _tab = i);
     if (i == 1) _loadExplore();
     if (i == 3) _loadVitals();
     if (i == 4) _loadLabs();
+  }
+
+  void _select(int i) {
+    _activate(i);
   }
 
   @override
   Widget build(BuildContext c) {
     final d = _d ?? const HealthData();
     final l = AppLocalizations.of(c);
-    return ListView(padding: pad, children: [
-      ScreenTitle(l?.healthTitle ?? 'Health'),
-      SubTabs(_tabsOf(l), _tab, _select, color: C.blue),
-      const SizedBox(height: S.x5),
-      if (_loading && _d == null)
-        const Padding(
-          padding: EdgeInsets.only(top: S.x8),
-          child: Center(child: CircularProgressIndicator()),
-        )
-      else
-        switch (_tab) {
-          0 => _overview(c, d),
-          1 => _explore(c),
-          2 => _trends(c, d),
-          3 => _vitals(c, d),
-          _ => _labs(c),
-        },
-    ]);
+    final inset = shellScrollPadding(c, pad);
+    return Column(
+      children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(inset.left, inset.top, inset.right, 0),
+          child: Column(
+            children: [
+              ScreenTitle(l?.healthTitle ?? 'Health'),
+              SubTabs(_tabsOf(l), _tab, _select, color: C.blue),
+              const SizedBox(height: S.x5),
+            ],
+          ),
+        ),
+        Expanded(
+          child: SubPages(
+            index: _tab,
+            count: _tabsOf(l).length,
+            onChanged: (i) {
+              if (i != _tab) _activate(i);
+            },
+            builder: (c, i) => ListView(
+              key: PageStorageKey('health-tab-$i'),
+              padding: EdgeInsets.fromLTRB(
+                inset.left,
+                0,
+                inset.right,
+                inset.bottom,
+              ),
+              children: [
+                if (_loading && _d == null)
+                  const Padding(
+                    padding: EdgeInsets.only(top: S.x8),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else
+                  switch (i) {
+                    0 => _overview(c, d),
+                    1 => _explore(c),
+                    2 => _trends(c, d),
+                    3 => _vitals(c, d),
+                    _ => _labs(c),
+                  },
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
   }
 
   // ─────────────── OVERVIEW ───────────────
@@ -679,7 +713,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
           unit: unit,
           series: series,
           rising: rising,
-          onTap: () => go(c, MetricDetail(metricKey))));
+          destination: MetricDetail(metricKey)));
     }
 
     // Five of these rows come off the overnight block, and `getToday` holds
@@ -867,7 +901,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
               // place and the rest one tap away. ONE row — a wall of findings
               // on the tab you land on is the feed this is not.
               Surface(
-                onTap: () => go(c, FindingsLog(d.findings)),
+                destination: FindingsLog(d.findings),
                 child: FindingRow(d.findings.first),
               ),
           action: d.findings.isEmpty ? null : (l?.healthSeeAll ?? 'See all'),
@@ -912,7 +946,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
                       : '${l?.healthNapCountLabel(d.napCount!) ?? '${d.napCount} '
                               'nap${d.napCount == 1 ? '' : 's'}'} · '
                           '${prettyDay(d.napDay)}',
-                  onTap: () => go(c, NapsScreen(day: d.napDay)),
+                  destination: NapsScreen(day: d.napDay),
                 ),
               ),
         action: l?.healthAddOrCorrect ?? 'Add or correct',
@@ -1029,7 +1063,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
         // Null with no baseline: an arrow and a good/bad hue about a
         // comparison the card has just said it cannot make.
         good: base == null ? null : (delta >= 0) == higherBetter,
-        onTap: () => go(c, MetricDetail(metricKey)),
+        destination: MetricDetail(metricKey),
       );
     }
 
@@ -1058,7 +1092,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
         Section(
           l?.healthBodyClockTitle ?? 'Body clock',
           Surface(
-            onTap: () => go(c, const CircadianDetail()),
+            destination: const CircadianDetail(),
             child: Column(children: [
               Row(children: [
                 Expanded(
@@ -1183,7 +1217,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
             // Both this row and the wear row below it carry a FULL, written,
             // cited spec in `metric_detail.dart` that no tap in the app opened.
             // The number was on screen and its method was unreachable.
-            onTap: () => go(c, const MetricDetail('skin_temp'))),
+            destination: const MetricDetail('skin_temp')),
       if (worn != null)
         MetricRow(LucideIcons.watch, C.green, l?.healthRowWearTime ?? 'Wear time',
             hm(worn),
@@ -1194,7 +1228,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
                         isToday ? (l.healthTheDay) : dayWord) ??
                     '${coverage.round()}% of '
                         '${isToday ? 'the day' : dayWord}'),
-            onTap: () => go(c, const MetricDetail('wear'))),
+            destination: const MetricDetail('wear')),
     ];
 
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1236,7 +1270,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
               l?.healthTimeFrequencyNonLinear ?? 'Time, frequency and non-linear',
               C.green,
               preview: _hrvPreview(c, d),
-              onTap: () => go(c, const Investigate('hrv'))),
+              destination: const Investigate('hrv')),
         ),
     ]);
   }
@@ -1367,7 +1401,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
                   // and the layout already says it.
                   return MetricRow(s.icon, s.color, s.title, '',
                       sub: _rowBlurb(l, r.key, r.blurb),
-                      onTap: () => go(c, MetricDetail(r.key)));
+                      destination: MetricDetail(r.key));
                 }),
               ],
             ]),

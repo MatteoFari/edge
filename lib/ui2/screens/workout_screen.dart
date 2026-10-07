@@ -33,12 +33,14 @@ import '../activity/catalogue.dart';
 import '../activity/day_strain.dart';
 import '../activity/live.dart';
 import '../activity/picker.dart';
+import '../app_shell.dart' show shellScrollPadding;
 import '../activity/poster.dart' show PosterStatRow;
 import '../activity/setup.dart';
 import '../activity/summary.dart';
 import '../charts.dart';
-import '../profile/profile.dart' show openProfile;
+import '../profile/profile.dart' show ProfileHome;
 import '../grammar.dart';
+import '../ui2.dart' show DetailLink, DetailOpener, SubPages;
 import '../revision.dart';
 import '../theme.dart';
 import '../../data/day_label.dart' show calendarDaysBetween;
@@ -87,43 +89,63 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
       builder: (c, snap) {
         final loc = AppLocalizations.of(c);
         final d = snap.data ?? const _WorkoutData.empty();
-        // THE LIST DROPS ITS SIDE PADDING and hands it to each child instead,
-        // so the hero card can be the one child that does not get it and runs
-        // edge to edge. Two earlier attempts had the CARD escape its parent —
-        // a negative margin (which Flutter asserts against) and an OverflowBox
-        // (which takes an unbounded height inside a scroll view and blanked
-        // this whole tab on device). Padding the siblings is ordinary layout
-        // and cannot do either.
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(0, S.x2, 0, S.x16),
+        final inset = shellScrollPadding(
+          c,
+          const EdgeInsets.fromLTRB(0, S.x2, 0, S.x16),
+        );
+        return Column(
           children: [
-            for (final w in <Widget>[
-              ScreenTitle(loc?.workoutScreenTitle ?? 'Workout'),
-              SubTabs(_tabs(loc), tab, (i) => setState(() => tab = i),
-                  color: C.domMove),
-              const SizedBox(height: S.x5),
-              ...switch (tab) {
-                0 => _forYou(c, d),
-                1 => _activities(c, d),
-                _ => _history(c, d),
-              },
-            ])
-              if (w is StartCard)
-                w
-              else
-                Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: S.x4),
-                    child: w),
+            Padding(
+              padding: EdgeInsets.fromLTRB(S.x4, inset.top, S.x4, 0),
+              child: Column(
+                children: [
+                  ScreenTitle(loc?.workoutScreenTitle ?? 'Workout'),
+                  SubTabs(
+                    _tabs(loc),
+                    tab,
+                    (i) => setState(() => tab = i),
+                    color: C.domMove,
+                  ),
+                  const SizedBox(height: S.x5),
+                ],
+              ),
+            ),
+            Expanded(
+              child: SubPages(
+                index: tab,
+                count: _tabs(loc).length,
+                onChanged: (i) => setState(() => tab = i),
+                builder: (c, i) => ListView(
+                  key: PageStorageKey('workout-tab-$i'),
+                  padding: EdgeInsets.only(bottom: inset.bottom),
+                  // StartCard stays edge to edge; other content owns its inset.
+                  children: [
+                    for (final w in switch (i) {
+                      0 => _forYou(c, d),
+                      1 => _activities(c, d),
+                      _ => _history(c, d),
+                    })
+                      if (w is StartCard)
+                        w
+                      else
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: S.x4),
+                          child: w,
+                        ),
+                  ],
+                ),
+              ),
+            ),
           ],
         );
       },
     );
   }
 
-  void _openPicker(BuildContext c, _WorkoutData d) =>
-      Navigator.of(c).push(MaterialPageRoute(
-          builder: (_) => ActivityPicker(
-              weightKg: d.weightKg, host: _host(d), recent: d.recent)));
+  Future<void> _openPicker(DetailOpener open, _WorkoutData d) async {
+    await open<void>(ActivityPicker(
+      weightKg: d.weightKg, host: _host(d), recent: d.recent));
+  }
 
   ActivityHost _host(_WorkoutData d) =>
       activityHost(context.read<AppState>(), history: d.setHistory);
@@ -140,7 +162,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
         asset: 'mascot_workout.png',
         accent: C.purple,
         deep: C.indigo,
-        onTap: () => _openPicker(c, d),
+        onNavigate: (open) => _openPicker(open, d),
       ),
       const SizedBox(height: S.x3),
       Row(children: [
@@ -149,9 +171,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
           Expanded(
             child: _QuickTile(
               quickStart[i],
-              () => Navigator.of(c).push(MaterialPageRoute(
-                  builder: (_) => ActivitySetup(quickStart[i],
-                      weightKg: d.weightKg, host: _host(d)))),
+              (open) async => open<void>(ActivitySetup(quickStart[i],
+                    weightKg: d.weightKg, host: _host(d))),
             ),
           ),
         ],
@@ -404,13 +425,16 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     final p = P.of(c);
     final loc = AppLocalizations.of(c);
     return [
-      Pressable(
-        onTap: () => _openPicker(c, d),
+      DetailLink(color: p.card2, radius: R.controlOf(c), builder: (open) => Pressable(
+        onTap: () => _openPicker(open, d),
         semanticLabel: loc?.workoutSearchActivitiesLabel ?? 'Search activities',
         child: Container(
           constraints: const BoxConstraints(minHeight: S.tap),
           padding: const EdgeInsets.symmetric(horizontal: S.x4),
-          decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+          decoration: BoxDecoration(
+            color: p.card2,
+            borderRadius: R.controlOf(c),
+          ),
           child: Row(children: [
             Icon(LucideIcons.search, size: 17, color: p.ink3),
             const SizedBox(width: S.x2),
@@ -420,7 +444,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
                 style: F.body.copyWith(color: p.ink3)),
           ]),
         ),
-      ),
+      )),
       const SizedBox(height: S.x5),
       Text(loc?.workoutQuickStartHeader ?? 'QUICK START',
           style: F.over.copyWith(color: p.ink3)),
@@ -433,9 +457,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
             Expanded(
               child: _QuickTile(
                 quickStart[i],
-                () => Navigator.of(c).push(MaterialPageRoute(
-                    builder: (_) => ActivitySetup(quickStart[i],
-                        weightKg: d.weightKg, host: _host(d)))),
+                (open) async => open<void>(ActivitySetup(quickStart[i],
+                      weightKg: d.weightKg, host: _host(d))),
               ),
             ),
           ],
@@ -448,11 +471,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
             pad: const EdgeInsets.symmetric(horizontal: S.x4),
             child: Column(children: [
               for (var i = 0; i < g.items.length; i++) ...[
-                ActivityRow(g.items[i],
+                DetailLink(builder: (open) => ActivityRow(g.items[i],
                     weightKg: d.weightKg,
-                    onTap: () => Navigator.of(c).push(MaterialPageRoute(
-                        builder: (_) => ActivitySetup(g.items[i],
-                            weightKg: d.weightKg, host: _host(d))))),
+                    onTap: () => open<void>(ActivitySetup(g.items[i],
+                        weightKg: d.weightKg, host: _host(d))))),
                 if (i < g.items.length - 1) Divider(color: p.line, height: 1),
               ],
             ]),
@@ -467,7 +489,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
               'Calorie estimates need your weight',
           '',
           fix: loc?.workoutAddWeightFix ?? 'Add weight in profile',
-          onFix: () => openProfile(c),
+          destination: const ProfileHome(),
           icon: LucideIcons.flame,
         ),
       if (d.weightKg != null) ...[
@@ -486,8 +508,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
   /// Open a screen that can write a session, then re-read. Every write path on
   /// this tab goes through here: `RevisionReload` covers the writers that bump
   /// `AppState.insightsRevision`, and this covers the ones that do not.
-  Future<void> _push(BuildContext c, Widget w) async {
-    await Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => w));
+  Future<void> _push(DetailOpener open, Widget w) async {
+    await open<void>(w);
     if (mounted) reload();
   }
 
@@ -515,8 +537,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
                 'is logged until you say so.',
         fix: loc?.workoutReviewFix(n) ?? 'Review ${n == 1 ? 'it' : 'them'}',
         icon: LucideIcons.radar,
-        onFix: () =>
-            _push(c, WorkoutSuggestionScreen()),
+        onNavigate: (open) => _push(open, WorkoutSuggestionScreen()),
       ),
       const SizedBox(height: S.x5),
     ];
@@ -532,7 +553,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
               'recorded across them, like any other session.',
       fix: loc?.workoutLogPastFix ?? 'Log a past workout',
       icon: LucideIcons.calendarPlus,
-      onFix: () => _push(c, const LogWorkout()),
+      onNavigate: (open) => _push(open, const LogWorkout()),
     );
   }
 
@@ -546,7 +567,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
           loc?.workoutNoSessionsTitle ?? 'No sessions recorded yet',
           loc?.workoutNoSessionsBody ?? 'Sessions appear here once you start one.',
           fix: loc?.workoutStartWorkoutFix ?? 'Start a workout',
-          onFix: () => _openPicker(c, d),
+          onNavigate: (open) => _openPicker(open, d),
           icon: LucideIcons.dumbbell,
         ),
         const SizedBox(height: S.x5),
@@ -604,8 +625,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
             // row's times belong to the app that recorded it, and this band
             // measured nothing across them.
             onRetime: w.importedFrom == null && w.id.isNotEmpty
-                ? () => _push(
-                      c,
+                ? (open) => _push(
+                      open,
                       LogWorkout(
                         sessionId: w.id,
                         start: w.start,
@@ -909,22 +930,22 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
 
 class _QuickTile extends StatelessWidget {
   final Activity a;
-  final VoidCallback onTap;
-  const _QuickTile(this.a, this.onTap);
+  final Future<void> Function(DetailOpener) onNavigate;
+  const _QuickTile(this.a, this.onNavigate);
 
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
     return Surface(
       pad: const EdgeInsets.symmetric(vertical: S.x4, horizontal: S.x2),
-      onTap: onTap,
+      onNavigate: onNavigate,
       semanticLabel: a.name,
       child: Column(children: [
         Container(
           width: 40,
           height: 40,
           decoration:
-              BoxDecoration(color: p.wash(a.color), borderRadius: R.rMd),
+              BoxDecoration(color: p.wash(a.color), borderRadius: R.controlOf(c)),
           child: Icon(a.icon, size: 19, color: p.on(a.color)),
         ),
         const SizedBox(height: S.x2),
@@ -946,7 +967,7 @@ class _HistoryRow extends StatelessWidget {
 
   /// Widen or correct this session's window. Null for an imported row, and for
   /// a session with no id to retime.
-  final VoidCallback? onRetime;
+  final Future<void> Function(DetailOpener)? onRetime;
 
   /// Remove this session locally. Null hides the control (no id to delete).
   final VoidCallback? onDelete;
@@ -954,11 +975,10 @@ class _HistoryRow extends StatelessWidget {
   const _HistoryRow(this.w,
       {this.weightKg, this.onRetime, this.onDelete});
 
-  Future<void> _open(BuildContext c) async {
-    final nav = Navigator.of(c);
+  Future<void> _open(BuildContext c, DetailOpener open) async {
     final r = await _detailOf(c.read<AppState>(), w);
-    await nav.push(MaterialPageRoute(
-        builder: (_) => ActivitySummary(r, weightKg: weightKg)));
+    if (!c.mounted) return;
+    await open<void>(ActivitySummary(r, weightKg: weightKg));
   }
 
   @override
@@ -974,14 +994,14 @@ class _HistoryRow extends StatelessWidget {
       // workout it is. A screen that presents an Apple Watch run exactly like
       // one of ours is the fabrication this whole table exists to avoid, so
       // the row stays a row until that screen can name its source.
-      onTap: w.importedFrom == null ? () => _open(c) : null,
+      onNavigate: w.importedFrom == null ? (open) => _open(c, open) : null,
       child: Column(children: [
         Row(children: [
           Container(
             width: 40,
             height: 40,
             decoration:
-                BoxDecoration(color: p.wash(a.color), borderRadius: R.rMd),
+                BoxDecoration(color: p.wash(a.color), borderRadius: R.controlOf(c)),
             child: Icon(a.icon, size: 19, color: p.on(a.color)),
           ),
           const SizedBox(width: S.x3),
@@ -1074,8 +1094,8 @@ class _HistoryRow extends StatelessWidget {
         // wins, so the row still opens the summary everywhere else.
         if (onRetime != null) ...[
           Divider(color: p.line, height: S.x5),
-          Pressable(
-            onTap: onRetime,
+          DetailLink(builder: (open) => Pressable(
+            onTap: () => onRetime!(open),
             semanticLabel: loc?.workoutFixTimesOnSessionLabel ??
                 'Fix the times on this session',
             child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
@@ -1085,7 +1105,7 @@ class _HistoryRow extends StatelessWidget {
                   style: F.cap.copyWith(
                       color: p.on(C.blue), fontWeight: FontWeight.w600)),
             ]),
-          ),
+          )),
         ],
       ]),
     );

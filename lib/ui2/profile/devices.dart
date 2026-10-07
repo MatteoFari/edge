@@ -1075,10 +1075,11 @@ class MyDevices extends StatelessWidget {
       // into first-run pairing (that was the bug where forgetting a band threw
       // months of data behind an onboarding screen), which makes this the only
       // way back to pairing. So push it.
-      onPair: () => goto(c, const RePair()),
-      onAddSensor: () => addSensor(c),
+      onNavigate: (open, page) async {
+        await open<void>(page);
+      },
+      onAddSensorNavigate: (open) => addSensor(c, open),
       contendedSignals: contendedSignals(app),
-      onSignalPriority: () => goto(c, const SignalPriorityScreen()),
     );
   }
 }
@@ -1366,7 +1367,7 @@ final List<({BandEntry entry, String blurb, Future<String?> Function(BluetoothDe
 ];
 
 /// Choose which kind of sensor to pair, then hand off to the pairing screen.
-Future<void> addSensor(BuildContext c) async {
+Future<void> addSensor(BuildContext c, [DetailOpener? open]) async {
   // Count paired secondary devices (the `device` table minus the primary row).
   //
   // PAIRED ROWS, NOT LIVE SLOTS, and deliberately: admission here is a
@@ -1395,7 +1396,11 @@ Future<void> addSensor(BuildContext c) async {
   if (!c.mounted) return;
   // `includeBand: false` — this phone already has its one primary band;
   // re-pairing it is `RePair`'s job, not a row beside a chest strap here.
-  await goto(c, const DevicePickerScreen(includeBand: false));
+  if (open == null) {
+    await goto(c, const DevicePickerScreen(includeBand: false));
+  } else {
+    await open<void>(const DevicePickerScreen(includeBand: false));
+  }
   // The picker's own sub-screens write a `device` row; nothing tells
   // AppState that happened.
   if (c.mounted) await c.read<AppState>().refreshSensors();
@@ -1518,6 +1523,8 @@ class MyDevicesView extends StatelessWidget {
   /// entry row absent by default (final-plan §4.5).
   final List<InputSignal> contendedSignals;
   final VoidCallback? onSignalPriority;
+  final Future<void> Function(DetailOpener, Widget)? onNavigate;
+  final Future<void> Function(DetailOpener)? onAddSensorNavigate;
 
   const MyDevicesView({
     super.key,
@@ -1527,6 +1534,8 @@ class MyDevicesView extends StatelessWidget {
     this.status,
     this.contendedSignals = const [],
     this.onSignalPriority,
+    this.onNavigate,
+    this.onAddSensorNavigate,
   });
 
   @override
@@ -1581,7 +1590,9 @@ class MyDevicesView extends StatelessWidget {
                                 'than estimate.'),
                     fix: l?.devicesPairABand ?? 'Pair a band',
                     icon: LucideIcons.watch,
-                    onFix: onPair,
+                    onFix: onNavigate == null ? onPair : null,
+                    onNavigate: onNavigate == null ? null
+                        : (open) => onNavigate!(open, const RePair()),
                   ),
                   if (sources.isNotEmpty) const SizedBox(height: S.x3),
                 ],
@@ -1593,7 +1604,7 @@ class MyDevicesView extends StatelessWidget {
                   const SizedBox(height: S.x3),
                 ],
                 for (final s in sources) ...[
-                  SourceRow(s, onTap: () => goto(c, DeviceDetail(s))),
+                  SourceRow(s, destination: DeviceDetail(s)),
                   if (s.isBand && fault != null) ...[
                     const SizedBox(height: S.x2),
                     StatusCard(fault.title, fault.reason,
@@ -1606,27 +1617,31 @@ class MyDevicesView extends StatelessWidget {
                 // gated on having a band: a sensor is a second source, and
                 // someone with no band at all is exactly who benefits most
                 // from being able to pair one.
-                if (onAddSensor != null)
+                if (onAddSensor != null || onAddSensorNavigate != null)
                   Surface(
                     pad: const EdgeInsets.symmetric(horizontal: S.x4),
+                    onNavigate: onAddSensorNavigate,
                     child: SetRow(LucideIcons.plus, C.green,
                         l?.devicesAddASensor ?? 'Add a sensor',
                         sub: l?.devicesAddASensorSub ??
                             'A heart-rate strap or a ring, alongside the band',
-                        onTap: onAddSensor),
+                        onTap: onAddSensorNavigate == null ? onAddSensor : null),
                   ),
                 // ONLY when something can actually contend. A reorder screen
                 // over one device is a control with nothing to order, which is
                 // the empty-rung problem this screen already refuses (§6.5).
-                if (contendedSignals.isNotEmpty && onSignalPriority != null) ...[
+                if (contendedSignals.isNotEmpty &&
+                    (onSignalPriority != null || onNavigate != null)) ...[
                   const SizedBox(height: S.x3),
                   Surface(
                     pad: const EdgeInsets.symmetric(horizontal: S.x4),
+                    onNavigate: onNavigate == null ? null
+                        : (open) => onNavigate!(open, const SignalPriorityScreen()),
                     child: SetRow(LucideIcons.arrowUpDown, C.blue,
                         l?.devicesWhichSourceWins ?? 'Which source wins',
                         sub: l?.devicesWhichSourceWinsSub ??
                             'When two of your devices measure the same thing',
-                        onTap: onSignalPriority),
+                        onTap: onNavigate == null ? onSignalPriority : null),
                   ),
                 ],
                 // NOT YET — removed from this screen per product decision
@@ -1707,7 +1722,8 @@ String _localizedSourceState(BuildContext c, HealthSource s) {
 class SourceRow extends StatelessWidget {
   final HealthSource s;
   final VoidCallback? onTap;
-  const SourceRow(this.s, {super.key, this.onTap});
+  final Widget? destination;
+  const SourceRow(this.s, {super.key, this.onTap, this.destination});
 
   @override
   Widget build(BuildContext c) {
@@ -1715,12 +1731,13 @@ class SourceRow extends StatelessWidget {
     final battery = s.batteryPct;
     return Surface(
       onTap: onTap,
+      destination: destination,
       child: Row(children: [
         Container(
           width: 52,
           height: 52,
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+          decoration: BoxDecoration(color: p.card2, borderRadius: R.controlOf(c)),
           child: Icon(s.icon, size: 24, color: p.ink2),
         ),
         const SizedBox(width: S.x3),
@@ -2639,7 +2656,9 @@ class DeviceDetailView extends StatelessWidget {
                     height: 120,
                     alignment: Alignment.center,
                     decoration:
-                        BoxDecoration(color: p.card2, borderRadius: R.rXxl),
+                        BoxDecoration(
+                            color: p.card2,
+                            borderRadius: p.expressive ? R.rPill : R.rXxl),
                     child: Icon(s.icon, size: 54, color: p.ink2),
                   ),
                 ),

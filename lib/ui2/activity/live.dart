@@ -642,7 +642,8 @@ class LiveShellState extends State<LiveShell> {
                     height: 60,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                        color: p.fill(a.color), borderRadius: R.rLg),
+                        color: p.fill(a.color),
+                        borderRadius: p.expressive ? R.rPill : R.rLg),
                     child: Icon(
                         paused ? LucideIcons.play : LucideIcons.pause,
                         size: 25,
@@ -1120,7 +1121,7 @@ class LiveMeasured extends StatelessWidget {
                       '${_distanceText(ctx, f.distanceKm!)} from the fixes '
                           'recorded so far.'),
               child: ClipRRect(
-                borderRadius: R.rLg,
+                borderRadius: R.cardOf(ctx),
                 child: Container(
                   color: p.card2,
                   child: CustomPaint(
@@ -1728,7 +1729,7 @@ class _LiveStrengthState extends State<LiveStrength> {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                       color: on ? p.fill(cols[i]) : p.wash(cols[i]),
-                      borderRadius: R.rMd),
+                      borderRadius: R.controlOf(c)),
                   child: Text('$v',
                       style: F.head.copyWith(
                           color: on ? p.inkOnFill : p.on(cols[i]))),
@@ -2164,7 +2165,8 @@ class _LiveFlowState extends State<LiveFlow>
           Container(
             height: 210,
             decoration: BoxDecoration(
-                borderRadius: R.rXl, color: p.wash(C.teal)),
+                borderRadius: p.expressive ? R.rXxl : R.rXl,
+                color: p.wash(C.teal)),
             child: Stack(alignment: Alignment.center, children: [
               AnimatedBuilder(
                 animation: breath,

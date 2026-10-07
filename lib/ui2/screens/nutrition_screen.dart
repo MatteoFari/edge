@@ -200,27 +200,51 @@ class _NutritionScreenState extends State<NutritionScreen> with RevisionReload {
   @override
   Widget build(BuildContext c) {
     final l = AppLocalizations.of(c);
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(S.x4, S.x4, S.x4, S.x16),
+    return Column(
       children: [
-        ScreenTitle(
-          l?.nutritionTitle ?? 'Nutrition',
-          trailing: Pressable(
-            semanticLabel: l?.nutritionLogFood ?? 'Log food',
-            onTap: _logFood,
-            child: Icon(
-              LucideIcons.circlePlus,
-              size: 22,
-              color: P.of(c).on(C.domFood),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(S.x4, S.x4, S.x4, 0),
+          child: Column(
+            children: [
+              ScreenTitle(
+                l?.nutritionTitle ?? 'Nutrition',
+                trailing: Pressable(
+                  semanticLabel: l?.nutritionLogFood ?? 'Log food',
+                  onTap: _logFood,
+                  child: Icon(
+                    LucideIcons.circlePlus,
+                    size: 22,
+                    color: P.of(c).on(C.domFood),
+                  ),
+                ),
+              ),
+              SubTabs(
+                _tabs(c),
+                _tab,
+                (i) => setState(() => _tab = i),
+                color: C.domFood,
+              ),
+              const SizedBox(height: S.x5),
+            ],
+          ),
+        ),
+        Expanded(
+          child: SubPages(
+            index: _tab,
+            count: _tabs(c).length,
+            onChanged: (i) => setState(() => _tab = i),
+            builder: (c, i) => ListView(
+              key: PageStorageKey('nutrition-tab-$i'),
+              padding: const EdgeInsets.fromLTRB(S.x4, 0, S.x4, S.x16),
+              children: [
+                if (_loading)
+                  const Center(child: CircularProgressIndicator())
+                else
+                  [_todayTab, _weekTab, _goalsTab][i](c),
+              ],
             ),
           ),
         ),
-        SubTabs(_tabs(c), _tab, (i) => setState(() => _tab = i), color: C.domFood),
-        const SizedBox(height: S.x5),
-        if (_loading)
-          const Center(child: CircularProgressIndicator())
-        else
-          [_todayTab, _weekTab, _goalsTab][_tab](c),
       ],
     );
   }
@@ -829,7 +853,10 @@ class MealRow extends StatelessWidget {
             Container(
               width: 36,
               height: 36,
-              decoration: BoxDecoration(color: p.card2, borderRadius: R.rSm),
+              decoration: BoxDecoration(
+                color: p.card2,
+                borderRadius: p.expressive ? R.rPill : R.rSm,
+              ),
               child: Icon(
                 _icons[meal] ?? LucideIcons.utensils,
                 size: 17,

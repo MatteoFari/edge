@@ -12670,5 +12670,90 @@
   "tabWellness": "Wellness",
   "@tabHome": {
     "description": "Bottom tab bar labels (tabHome..tabWellness). Keep short; the five must read as different words."
-  }
+  },
+  "settingsAppearanceSystem": "System",
+  "@settingsAppearanceSystem": {
+    "description": "Appearance value: follow the system brightness"
+  },
+  "settingsAppearanceLight": "Light",
+  "@settingsAppearanceLight": {
+    "description": "Appearance value: light brightness"
+  },
+  "settingsAppearanceDark": "Dark",
+  "@settingsAppearanceDark": {
+    "description": "Appearance value: dark brightness"
+  },
+  "settingsInterfaceStyleTitle": "Interface style",
+  "@settingsInterfaceStyleTitle": {
+    "description": "Settings row and picker title for the independent interface style"
+  },
+  "settingsInterfaceStyleHint": "Choose the shapes and controls. Light and dark appearance follow your separate setting.",
+  "@settingsInterfaceStyleHint": {
+    "description": "Explains that interface style changes shapes independently of brightness"
+  },
+  "settingsInterfaceStyleOriginal": "Original",
+  "@settingsInterfaceStyleOriginal": {
+    "description": "Interface style option: Original"
+  },
+  "settingsInterfaceStyleExpressive": "Expressive",
+  "@settingsInterfaceStyleExpressive": {
+    "description": "Interface style option: Expressive"
+  },
+  "settingsInterfaceStyleOriginalDescription": "Familiar cards and compact controls.",
+  "@settingsInterfaceStyleOriginalDescription": {
+    "description": "Description of the Original interface style"
+  },
+  "settingsInterfaceStyleExpressiveDescription": "Rounder cards, pill controls and stronger visual emphasis.",
+  "@settingsInterfaceStyleExpressiveDescription": {
+    "description": "Description of the Expressive interface style"
+  },
+  "settingsInterfaceStyleSelected": "Selected",
+  "@settingsInterfaceStyleSelected": {
+    "description": "Status shown beside the current interface style choice"
+  },
+  "settingsInterfaceStyleSaveFailed": "Could not save the interface style. Please try again.",
+  "@settingsInterfaceStyleSaveFailed": {
+    "description": "Shown when interface style preference could not be saved"
+  },
+  "settingsPaletteTitle": "Colour palette",
+  "@settingsPaletteTitle": {
+    "description": "Settings row and picker title for Expressive colours"
+  },
+  "settingsPaletteHint": "Try a different set of colours. Each palette works in light and dark mode.",
+  "@settingsPaletteHint": {
+    "description": "Palette picker explanation; brightness stays independent"
+  },
+  "settingsPaletteEdge": "Edge",
+  "@settingsPaletteEdge": {
+    "description": "Expressive palette option"
+  },
+  "settingsPaletteMatteLime": "Matte lime",
+  "@settingsPaletteMatteLime": {
+    "description": "Expressive palette option"
+  },
+  "settingsPaletteElectricViolet": "Electric violet",
+  "@settingsPaletteElectricViolet": {
+    "description": "Expressive palette option"
+  },
+  "settingsPaletteFreshMint": "Fresh mint",
+  "@settingsPaletteFreshMint": {
+    "description": "Expressive palette option"
+  },
+  "settingsPaletteWarmAmber": "Warm amber",
+  "@settingsPaletteWarmAmber": {
+    "description": "Expressive palette option"
+  },
+  "settingsPaletteSaveFailed": "Could not save the colour palette. Please try again.",
+  "@settingsPaletteSaveFailed": {
+    "description": "Shown when the palette preference cannot be saved"
+  },
+  "homeMetricFullDetails": "Full details",
+  "homeMetricClose": "Close summary",
+  "homeMetricLoadFailed": "Could not load this summary",
+  "homeMetricRetry": "Retry",
+  "homeMetricUsual": "Usual",
+  "homeMetricRecoveryTrend": "Last 7 days",
+  "homeMetricNoBreakdown": "No recorded breakdown for this day",
+  "homeHeaderProcessing": "Processing",
+  "homeHeaderSyncIssue": "Sync issue"
 }

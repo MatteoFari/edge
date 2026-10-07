@@ -68,7 +68,7 @@ class _ScanSheet extends StatelessWidget {
             ),
             const SizedBox(height: S.x4),
             ClipRRect(
-              borderRadius: R.rLg,
+              borderRadius: R.cardOf(c),
               child: AspectRatio(
                 aspectRatio: 1,
                 child: BarcodeReaderWidget(

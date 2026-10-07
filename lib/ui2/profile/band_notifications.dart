@@ -256,7 +256,7 @@ class _AppRow extends StatelessWidget {
         padding: const EdgeInsets.symmetric(vertical: S.x3),
         child: Row(children: [
           ClipRRect(
-            borderRadius: R.rSm,
+            borderRadius: p.expressive ? R.rPill : R.rSm,
             child: icon != null && icon.isNotEmpty
                 ? Image.memory(icon,
                     width: 32,
@@ -268,7 +268,8 @@ class _AppRow extends StatelessWidget {
                     height: 32,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                        color: p.wash(C.purple), borderRadius: R.rSm),
+                        color: p.wash(C.purple),
+                        borderRadius: p.expressive ? R.rPill : R.rSm),
                     child: Icon(LucideIcons.appWindow,
                         size: 16, color: p.on(C.purple)),
                   ),

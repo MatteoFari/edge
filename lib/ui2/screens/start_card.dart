@@ -49,6 +49,7 @@ class StartCard extends StatelessWidget {
     this.sub,
     this.mascotHeight = 126,
     this.onTap,
+    this.onNavigate,
   });
 
   /// The overline — "START A SESSION".
@@ -85,18 +86,20 @@ class StartCard extends StatelessWidget {
   final double mascotHeight;
 
   final VoidCallback? onTap;
+  final Future<void> Function(DetailOpener)? onNavigate;
 
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
     final subText = sub ?? (l?.startCardDefaultSub ?? 'Pick one and go');
-    // No side radius when bleeding — a rounded corner against the screen edge
-    // reads as a card that failed to fit.
-    final card = Pressable(
-      onTap: onTap,
+    // Original bleeds to the screen edge; Expressive groups the same entry
+    // as a shaped card with the domain's other surfaces.
+    Widget press(VoidCallback? tap) => Pressable(
+      onTap: tap,
       semanticLabel: label.toLowerCase(),
-      child: ClipRect(
+      child: ClipRRect(
+        borderRadius: p.expressive ? R.rXxl : BorderRadius.zero,
         child: Container(
           // A FLOOR, not a fixed height, so the copy can grow.
           constraints: const BoxConstraints(minHeight: 190),
@@ -122,12 +125,13 @@ class StartCard extends StatelessWidget {
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(S.x4, S.x4, S.x2, S.x4),
                   child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(label,
                             style: F.over.copyWith(
                                 color: C.white.withValues(alpha: .75))),
-                        const Spacer(),
+                        const SizedBox(height: S.x4),
                         Text('$count $noun',
                             style: F.t2.copyWith(color: C.white),
                             maxLines: 1,
@@ -152,7 +156,7 @@ class StartCard extends StatelessWidget {
               ),
               // Bottom right, standing on the base of the card. Decoration
               // only: no semantics, no hit test, and the one thing here allowed
-              // to be cut off by the edge — which is what the ClipRect is for.
+              // to be cut off by the edge — which is what the clip is for.
               ExcludeSemantics(
                 child: IgnorePointer(
                   child: Image.asset('assets/images/$asset',
@@ -166,6 +170,19 @@ class StartCard extends StatelessWidget {
       ),
     );
 
-    return card;
+    final card = onNavigate == null
+        ? press(onTap)
+        : DetailLink(
+            color: p.fill(accent),
+            radius: R.rXxl,
+            builder: (open) => press(() => onNavigate!(open)),
+          );
+
+    return p.expressive
+        ? Padding(
+            padding: const EdgeInsets.symmetric(horizontal: S.x4),
+            child: card,
+          )
+        : card;
   }
 }

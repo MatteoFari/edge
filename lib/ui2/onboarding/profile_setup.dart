@@ -220,7 +220,7 @@ class _Choice extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: S.x2, vertical: S.x2),
         decoration: BoxDecoration(
           color: on ? p.wash(C.green) : p.card,
-          borderRadius: R.rMd,
+          borderRadius: R.controlOf(c),
           border: Border.all(color: on ? p.on(C.green) : p.line),
         ),
         child: Text(label,

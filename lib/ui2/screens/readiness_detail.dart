@@ -12,6 +12,7 @@ import 'package:openstrap_analytics/onehz.dart' show readinessCompositeMinBaseli
 import '../../compute/onehz_pipeline.dart'
     show readinessInputShortfallNote, readinessUnstableBaselineNote;
 import '../../data/db.dart';
+import '../../data/day_label.dart';
 import '../../data/local_repository.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/metric.dart';
@@ -21,6 +22,7 @@ import 'investigate.dart';
 import 'metric_detail.dart';
 
 class ReadinessData {
+  final String? day;
   final Metric readiness;
   final List<Map<String, dynamic>> breakdown;
   final int inputsUsed;
@@ -50,6 +52,7 @@ class ReadinessData {
   final List<double?> series;
 
   const ReadinessData({
+    this.day,
     this.readiness = Metric.empty,
     this.breakdown = const [],
     this.inputsUsed = 0,
@@ -58,7 +61,20 @@ class ReadinessData {
     this.absentDiag,
   });
 
-  static Future<ReadinessData> load(LocalRepository repo) async {
+  static Future<ReadinessData> load(LocalRepository repo, {String? want}) async {
+    if (want != null && want != todayLabel()) {
+      final overview = await repo.getDayOverview(want);
+      final readiness = metricOf(overview['readiness']);
+      return ReadinessData(
+        day: want,
+        readiness: readiness,
+        series: denseDays(pointsOf(await repo.getChart('recovery')), 90,
+            end: DateTime.parse(want)),
+        absentDiag: readiness.value != null
+            ? null
+            : await LocalDb.readinessAbsentDiag(want),
+      );
+    }
     final today = await repo.getToday();
     final cd = await repo.getInsights();
     final chart = await repo.getChart('recovery');
@@ -104,7 +120,8 @@ class ReadinessData {
 
 class ReadinessDetail extends StatefulWidget {
   final ReadinessData? data;
-  const ReadinessDetail({super.key, this.data});
+  final String? day;
+  const ReadinessDetail({super.key, this.data, this.day});
 
   @override
   State<ReadinessDetail> createState() => _ReadinessDetailState();
@@ -132,7 +149,7 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
       return;
     }
     try {
-      final d = await ReadinessData.load(repo);
+      final d = await ReadinessData.load(repo, want: widget.day);
       if (mounted) setState(() => (_d = d, _loading = false));
     } catch (_) {
       if (mounted) setState(() => _loading = false);
@@ -147,9 +164,8 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
     final v = d.readiness.value;
     final band = readinessBand(v, l);
 
-    // No date in the nav bar. It named the held-over night, and the headline
-    // can no longer BE that night — a date up here now would be labelling
-    // today's number with somebody else's day.
+    // An explicit historical request stays historical; the ordinary route is
+    // still today's score and never adopts a held-over night's date.
     return detailScaffold(c, l?.readinessDetailTitle ?? 'Readiness', [
       if (_loading && _d == null) ...[
         const SizedBox(height: S.x8),
@@ -278,6 +294,7 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
             l?.readinessDetailWhatWentIntoIt ?? 'What went into it',
             StatusCard(
               l?.readinessDetailNoBreakdownTitle ?? 'No breakdown yet',
+              d.day != null ? (l?.homeMetricNoBreakdown ?? 'No recorded breakdown for this day') :
               l?.readinessDetailNoBreakdownBody ??
                   'Ranking each input against your own history takes about two '
                       'weeks of nights.',
@@ -299,9 +316,9 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
               : Surface(child: _history(c, d)),
         ),
         const SizedBox(height: S.x5),
-        investigateRow(c, () => go(c, const Investigate('readiness'))),
+        investigateRow(c, null, destination: Investigate('readiness', day: d.day)),
       ],
-    ]);
+    ], sub: d.day == null ? '' : prettyDay(d.day));
   }
 
   /// The last 90 CALENDAR days, trimmed to start at the first day that
@@ -337,9 +354,12 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
       // IS today. MetricDetail draws the same `recovery` series and already
       // counts it this way; the two screens dated one chart differently.
       xLabels: [
+        d.day != null ? prettyDay(dayLabelOf(DateTime(
+            DateTime.parse(d.day!).year, DateTime.parse(d.day!).month,
+            DateTime.parse(d.day!).day - (win.length - 1)))) :
         l?.readinessDetailDaysAgo(win.length - 1) ??
             '${win.length - 1} day${win.length == 2 ? '' : 's'} ago',
-        l?.readinessDetailToday ?? 'Today',
+        d.day == null ? (l?.readinessDetailToday ?? 'Today') : prettyDay(d.day),
       ],
       series: win,
       child: CustomPaint(

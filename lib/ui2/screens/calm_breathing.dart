@@ -722,7 +722,7 @@ class _Setup extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(vertical: S.x3),
                           decoration: BoxDecoration(
                             color: m == minutes ? p.fill(C.domMind) : p.card,
-                            borderRadius: R.rMd,
+                            borderRadius: R.controlOf(c),
                           ),
                           child: Center(
                             child: Text(

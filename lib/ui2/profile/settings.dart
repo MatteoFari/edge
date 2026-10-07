@@ -75,6 +75,8 @@ class _MoreSettingsState extends State<MoreSettings> {
   bool _barcode = offLookupAllowed;
   String _version = '';
   int _taps = 0;
+  bool _savingInterfaceStyle = false;
+  bool _savingPalette = false;
 
   /// The home-screen icon, asked of the OS rather than stored — see
   /// lib/platform/app_icon.dart. Null until the answer arrives, and the row is
@@ -144,6 +146,72 @@ class _MoreSettingsState extends State<MoreSettings> {
     });
   }
 
+  Future<void> _pickInterfaceStyle(BuildContext c) async {
+    if (_savingInterfaceStyle) return;
+    final theme = c.read<ThemeController>();
+    final p = P.of(c);
+    final picked = await showModalBottomSheet<InterfaceStyle>(
+      context: c,
+      backgroundColor: p.card,
+      showDragHandle: true,
+      isScrollControlled: true,
+      sheetAnimationStyle: sheetMotion(c),
+      builder: (sheet) => InterfaceStylePicker(
+        chosen: theme.interfaceStyle,
+        onPick: (style) => Navigator.of(sheet).pop(style),
+      ),
+    );
+    if (!mounted || picked == null || picked == theme.interfaceStyle) return;
+    setState(() => _savingInterfaceStyle = true);
+    var saved = false;
+    try {
+      saved = await theme.setInterfaceStyle(picked);
+    } catch (_) {
+      // A refused preference write is a failed choice, whatever its cause.
+    } finally {
+      if (mounted) setState(() => _savingInterfaceStyle = false);
+    }
+    if (!mounted || saved) return;
+    final l = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(l?.settingsInterfaceStyleSaveFailed ??
+          'Could not save the interface style. Please try again.'),
+    ));
+  }
+
+  Future<void> _pickPalette(BuildContext c) async {
+    if (_savingPalette) return;
+    final theme = c.read<ThemeController>();
+    final p = P.of(c);
+    final picked = await showModalBottomSheet<ExpressivePalette>(
+      context: c,
+      backgroundColor: p.card,
+      showDragHandle: true,
+      isScrollControlled: true,
+      sheetAnimationStyle: sheetMotion(c),
+      builder: (sheet) => ExpressivePalettePicker(
+        chosen: theme.palette,
+        onPick: (palette) => Navigator.of(sheet).pop(palette),
+      ),
+    );
+    if (!mounted || picked == null || picked == theme.palette) return;
+    setState(() => _savingPalette = true);
+    var saved = false;
+    try {
+      saved = await theme.setPalette(picked);
+    } catch (_) {
+      // Report a refused preference write without claiming it was saved.
+    } finally {
+      if (mounted) setState(() => _savingPalette = false);
+    }
+    if (!mounted || saved) return;
+    final l = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(l?.settingsPaletteSaveFailed ??
+          'Could not save the colour palette. Please try again.'),
+    ));
+  }
+
   @override
   Widget build(BuildContext c) {
     final app = c.watch<AppState>();
@@ -155,9 +223,23 @@ class _MoreSettingsState extends State<MoreSettings> {
       devMode: _dev,
       onVersionTap: _tapVersion,
       onToggleDev: () => _setDev(false),
-      onGallery: () => goto(c, const GalleryScreen()),
+      onNavigate: (open, page) async {
+        await open<void>(page);
+      },
       units: units.system.label,
-      appearance: theme.choice.label,
+      appearance: switch (theme.choice) {
+        AppThemeChoice.system =>
+          AppLocalizations.of(c)?.settingsAppearanceSystem ?? 'System',
+        AppThemeChoice.light =>
+          AppLocalizations.of(c)?.settingsAppearanceLight ?? 'Light',
+        AppThemeChoice.dark =>
+          AppLocalizations.of(c)?.settingsAppearanceDark ?? 'Dark',
+      },
+      interfaceStyle: theme.interfaceStyle,
+      onPickInterfaceStyle:
+          _savingInterfaceStyle ? null : () => _pickInterfaceStyle(c),
+      palette: theme.palette,
+      onPickPalette: _savingPalette ? null : () => _pickPalette(c),
       clockFormat: clock.format,
       cycleTracking: app.cycleTrackingEnabled,
       zoneAlertEnabled: app.zoneAlertEnabled,
@@ -180,11 +262,6 @@ class _MoreSettingsState extends State<MoreSettings> {
       updateChecks: app.updateChecksEnabled,
       updateAvailable: app.updateAvailable,
       updateMandatory: app.updateMandatory,
-      onEditProfile: () => goto(c, const EditProfile()),
-      onAlarm: () => goto(c, const AlarmScreen()),
-      onNotifications: () => goto(c, const NotificationSettings()),
-      onData: () => goto(c, const DataScreen()),
-      onAutomation: () => goto(c, const AutomationSettings()),
       onCycleUnits: () => units.setSystem(units.isImperial
           ? UnitSystem.metric
           : UnitSystem.imperial),
@@ -242,7 +319,9 @@ class _IconRow extends StatelessWidget {
           height: 32,
           alignment: Alignment.center,
           decoration:
-              BoxDecoration(color: p.wash(C.indigo), borderRadius: R.rSm),
+              BoxDecoration(
+                  color: p.wash(C.indigo),
+                  borderRadius: p.expressive ? R.rPill : R.rSm),
           child: Icon(LucideIcons.image, size: 16, color: p.on(C.indigo)),
         ),
         const SizedBox(width: S.x3),
@@ -294,7 +373,7 @@ class _IconChoice extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(S.x1 / 2),
         decoration: BoxDecoration(
-          borderRadius: R.rMd,
+          borderRadius: R.controlOf(c),
           border: Border.all(
               color: selected ? p.on(C.indigo) : p.line, width: selected ? 2 : 1),
         ),
@@ -490,8 +569,195 @@ Future<void> _confirmReset(BuildContext c, AppState app) async {
   if (c.mounted) backToRoot(c);
 }
 
+String interfaceStyleLabel(BuildContext c, InterfaceStyle style) {
+  final l = AppLocalizations.of(c);
+  return switch (style) {
+    InterfaceStyle.original => l?.settingsInterfaceStyleOriginal ?? 'Original',
+    InterfaceStyle.expressive =>
+      l?.settingsInterfaceStyleExpressive ?? 'Expressive',
+  };
+}
+
+/// Interface style is separate from light/dark appearance: changing these
+/// shapes does not choose a different brightness or replace the app state.
+class InterfaceStylePicker extends StatelessWidget {
+  final InterfaceStyle chosen;
+  final ValueChanged<InterfaceStyle> onPick;
+
+  const InterfaceStylePicker(
+      {super.key, required this.chosen, required this.onPick});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, S.x6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l?.settingsInterfaceStyleTitle ?? 'Interface style',
+                style: F.t2.copyWith(color: p.ink)),
+            const SizedBox(height: S.x2),
+            Text(l?.settingsInterfaceStyleHint ??
+                    'Choose the shapes and controls. Light and dark appearance '
+                        'follow your separate setting.',
+                style: F.cap.copyWith(color: p.ink2)),
+            const SizedBox(height: S.x4),
+            for (final style in InterfaceStyle.values) ...[
+              if (style != InterfaceStyle.values.first)
+                const SizedBox(height: S.x3),
+              Semantics(
+                selected: style == chosen,
+                child: Surface(
+                  color: style == chosen ? p.wash(C.purple) : p.card2,
+                  onTap: () => onPick(style),
+                  child: Row(children: [
+                    Icon(
+                        style == chosen
+                            ? LucideIcons.circleCheck
+                            : LucideIcons.circle,
+                        size: 22,
+                        color: style == chosen ? p.on(C.purple) : p.ink3),
+                    const SizedBox(width: S.x3),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(interfaceStyleLabel(c, style),
+                              style: F.head.copyWith(color: p.ink)),
+                          const SizedBox(height: S.x1),
+                          Text(
+                              switch (style) {
+                                InterfaceStyle.original =>
+                                  l?.settingsInterfaceStyleOriginalDescription ??
+                                      'Familiar cards and compact controls.',
+                                InterfaceStyle.expressive =>
+                                  l?.settingsInterfaceStyleExpressiveDescription ??
+                                      'Rounder cards, pill controls and stronger '
+                                          'visual emphasis.',
+                              },
+                              style: F.cap.copyWith(color: p.ink2)),
+                          if (style == chosen) ...[
+                            const SizedBox(height: S.x1),
+                            Text(l?.settingsInterfaceStyleSelected ?? 'Selected',
+                                style: F.cap.copyWith(color: p.on(C.purple))),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String expressivePaletteLabel(BuildContext c, ExpressivePalette palette) {
+  final l = AppLocalizations.of(c);
+  return switch (palette) {
+    ExpressivePalette.edge => l?.settingsPaletteEdge ?? 'Edge',
+    ExpressivePalette.matteLime => l?.settingsPaletteMatteLime ?? 'Matte lime',
+    ExpressivePalette.electricViolet =>
+      l?.settingsPaletteElectricViolet ?? 'Electric violet',
+    ExpressivePalette.freshMint => l?.settingsPaletteFreshMint ?? 'Fresh mint',
+    ExpressivePalette.warmAmber => l?.settingsPaletteWarmAmber ?? 'Warm amber',
+  };
+}
+
+/// Preview the shared surface and metric tokens at the current brightness.
+class ExpressivePalettePicker extends StatelessWidget {
+  final ExpressivePalette chosen;
+  final ValueChanged<ExpressivePalette> onPick;
+
+  const ExpressivePalettePicker(
+      {super.key, required this.chosen, required this.onPick});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, S.x6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l?.settingsPaletteTitle ?? 'Colour palette',
+                style: F.t2.copyWith(color: p.ink)),
+            const SizedBox(height: S.x2),
+            Text(l?.settingsPaletteHint ??
+                'Try a different set of colours. Each palette works in light '
+                    'and dark mode.',
+                style: F.cap.copyWith(color: p.ink2)),
+            const SizedBox(height: S.x4),
+            for (final palette in ExpressivePalette.values) ...[
+              if (palette != ExpressivePalette.values.first)
+                const SizedBox(height: S.x3),
+              Semantics(
+                selected: palette == chosen,
+                child: Surface(
+                  onTap: () => onPick(palette),
+                  color: palette == chosen ? p.wash(C.purple) : p.card2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Icon(palette == chosen ? LucideIcons.circleCheck :
+                            LucideIcons.circle, size: S.x6,
+                            color: palette == chosen ? p.on(C.purple) : p.ink3),
+                        const SizedBox(width: S.x3),
+                        Expanded(child: Text(expressivePaletteLabel(c, palette),
+                            style: F.head.copyWith(color: p.ink))),
+                      ]),
+                      const SizedBox(height: S.x3),
+                      ExcludeSemantics(child: _PaletteSwatches(
+                          P(p.dark, expressive: true, palette: palette))),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaletteSwatches extends StatelessWidget {
+  final P palette;
+  const _PaletteSwatches(this.palette);
+
+  @override
+  Widget build(BuildContext c) => Container(
+    padding: const EdgeInsets.all(S.x2),
+    decoration: BoxDecoration(color: palette.bg, borderRadius: R.rPill),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      for (final color in [palette.card2, palette.on(C.green),
+          palette.on(C.blue), palette.on(C.purple)])
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: S.x1),
+          child: Container(width: S.x6, height: S.x6,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        ),
+    ]),
+  );
+}
+
 class MoreSettingsView extends StatelessWidget {
   final String units, appearance;
+  final InterfaceStyle interfaceStyle;
+  final VoidCallback? onPickInterfaceStyle;
+  final ExpressivePalette palette;
+  final VoidCallback? onPickPalette;
 
   /// 12- or 24-hour clock, or whatever the OS says ("System", the default).
   final ClockFormat clockFormat;
@@ -536,6 +802,7 @@ class MoreSettingsView extends StatelessWidget {
   final bool devMode;
 
   final VoidCallback? onVersionTap, onToggleDev, onGallery;
+  final Future<void> Function(DetailOpener, Widget)? onNavigate;
 
   final VoidCallback? onEditProfile,
       onAlarm,
@@ -560,6 +827,10 @@ class MoreSettingsView extends StatelessWidget {
     super.key,
     this.units = 'Metric',
     this.appearance = 'System',
+    this.interfaceStyle = InterfaceStyle.original,
+    this.onPickInterfaceStyle,
+    this.palette = ExpressivePalette.edge,
+    this.onPickPalette,
     this.clockFormat = ClockFormat.system,
     this.appIcon,
     this.onPickIcon,
@@ -583,6 +854,7 @@ class MoreSettingsView extends StatelessWidget {
     this.onVersionTap,
     this.onToggleDev,
     this.onGallery,
+    this.onNavigate,
     this.onEditProfile,
     this.onAlarm,
     this.onNotifications,
@@ -629,7 +901,9 @@ class MoreSettingsView extends StatelessWidget {
                       l?.settingsAlarmRowTitle ?? 'Alarm',
                       sub: l?.settingsAlarmRowSub ??
                           'Buzzes on your wrist, on the band’s own clock',
-                      onTap: onAlarm),
+                      onTap: onNavigate == null ? onAlarm : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const AlarmScreen())),
                   // Off by default — an existing user did not ask their band
                   // to start buzzing mid-workout. The target-zone row below
                   // only appears once this is on; a target for an alert
@@ -674,7 +948,9 @@ class MoreSettingsView extends StatelessWidget {
                       sub: l?.settingsManageNotificationsRowSub ??
                           'What may interrupt you, quiet hours, and off '
                               'switches for all of them',
-                      onTap: onNotifications),
+                      onTap: onNavigate == null ? onNotifications : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const NotificationSettings())),
                 ]),
                 settingsGroup(c, l?.settingsGroupPreferences ?? 'Preferences', [
                   SetRow(LucideIcons.ruler, C.blue,
@@ -683,6 +959,15 @@ class MoreSettingsView extends StatelessWidget {
                   SetRow(LucideIcons.sun, C.yellow,
                       l?.settingsAppearanceRowTitle ?? 'Appearance',
                       value: appearance, onTap: onCycleAppearance),
+                  SetRow(LucideIcons.palette, C.purple,
+                      l?.settingsInterfaceStyleTitle ?? 'Interface style',
+                      value: interfaceStyleLabel(c, interfaceStyle),
+                      onTap: onPickInterfaceStyle),
+                  if (interfaceStyle == InterfaceStyle.expressive)
+                    SetRow(LucideIcons.swatchBook, C.green,
+                        l?.settingsPaletteTitle ?? 'Colour palette',
+                        value: expressivePaletteLabel(c, palette),
+                        onTap: onPickPalette),
                   SetRow(LucideIcons.clock, C.teal,
                       l?.settingsClockFormatRowTitle ?? 'Time format',
                       value: switch (clockFormat) {
@@ -713,7 +998,9 @@ class MoreSettingsView extends StatelessWidget {
                           'Export, backup, import',
                       sub: l?.settingsExportBackupImportRowSub ??
                           'Spreadsheets, a full copy, and bringing history in',
-                      onTap: onData),
+                      onTap: onNavigate == null ? onData : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const DataScreen())),
                   // The row P1 was missing. Everything behind it — the
                   // permission request, the retry/backoff, the four gates —
                   // was already written and simply had no way to be switched
@@ -738,7 +1025,7 @@ class MoreSettingsView extends StatelessWidget {
                           sub: AppLocalizations.of(c)
                                   ?.settingsDoubleTapRowSub ??
                               'What a double-tap on the band does',
-                          onTap: () => goto(c, const BandGestures()))),
+                          destination: const BandGestures())),
                   SetRow(LucideIcons.workflow, C.indigo,
                       l?.settingsTaskerShortcutsRowTitle ??
                           'Tasker and Shortcuts',
@@ -748,7 +1035,9 @@ class MoreSettingsView extends StatelessWidget {
                       sub: l?.settingsTaskerShortcutsRowSub ??
                           'Android only for events out. iOS can buzz the band '
                               'but cannot be triggered by it',
-                      onTap: onAutomation),
+                      onTap: onNavigate == null ? onAutomation : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const AutomationSettings())),
                 ]),
                 settingsGroup(c, l?.settingsGroupPrivacy ?? 'Privacy', [
                   SetRow(LucideIcons.bug, C.orange,
@@ -820,7 +1109,9 @@ class MoreSettingsView extends StatelessWidget {
                         sub: l?.settingsComponentGalleryRowSub ??
                             'Every component, at any text scale, in either '
                                 'theme',
-                        onTap: onGallery),
+                        onTap: onNavigate == null ? onGallery : null,
+                        onNavigate: onNavigate == null ? null
+                            : (open) => onNavigate!(open, const GalleryScreen())),
                     SetRow(LucideIcons.code, C.n500,
                         l?.settingsDeveloperModeRowTitle ?? 'Developer mode',
                         value: on, chevron: false, onTap: onToggleDev),
@@ -1201,7 +1492,7 @@ class NotificationSettingsView extends StatelessWidget {
                               'Buzz on app notifications',
                           sub: l?.settingsBuzzOnAppNotificationsRowSub ??
                               'Pick which phone apps make the strap buzz',
-                          onTap: () => goto(c, const BandNotifications())),
+                          destination: const BandNotifications()),
                     ]),
                   settingsGroup(c, l?.settingsGroupQuietHours ?? 'Quiet hours', [
                     SetRow(LucideIcons.moon, C.indigo,

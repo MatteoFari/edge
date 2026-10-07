@@ -21,7 +21,9 @@ Future<String?> showExercisePicker(
   isScrollControlled: true,
   sheetAnimationStyle: sheetMotion(context),
   backgroundColor: P.of(context).card,
-  shape: const RoundedRectangleBorder(borderRadius: R.rXl),
+  shape: RoundedRectangleBorder(
+    borderRadius: P.of(context).expressive ? R.rXxl : R.rXl,
+  ),
   builder: (_) => FractionallySizedBox(
     heightFactor: .92,
     child: _ExercisePicker(
@@ -146,7 +148,10 @@ class _ExercisePickerState extends State<_ExercisePicker> {
             Container(
               constraints: const BoxConstraints(minHeight: S.tap),
               padding: const EdgeInsets.symmetric(horizontal: S.x4),
-              decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+              decoration: BoxDecoration(
+                color: p.card2,
+                borderRadius: R.controlOf(context),
+              ),
               child: Row(
                 children: [
                   Icon(LucideIcons.search, size: 17, color: p.ink3),

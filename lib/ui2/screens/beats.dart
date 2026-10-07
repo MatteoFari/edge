@@ -281,7 +281,7 @@ class _BeatsState extends State<Beats> {
           _rhythm(c, d),
           const SizedBox(height: S.x5),
           investigateRow(c,
-              () => go(c, Investigate('hrv', day: _day ?? d.day))),
+              null, destination: Investigate('hrv', day: _day ?? d.day)),
         ],
       ],
       // WHICH NIGHT, in the app's one day format. Every panel below describes

@@ -27,6 +27,30 @@
 
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/physics.dart';
+
+/// Presentation only. Both interfaces read the same repositories and state.
+enum InterfaceStyle { original, expressive }
+
+/// Stable preference IDs. Edge retains the palette of existing installations.
+enum ExpressivePalette { edge, matteLime, electricViolet, freshMint, warmAmber }
+
+class InterfaceDesign extends ThemeExtension<InterfaceDesign> {
+  final InterfaceStyle style;
+  final ExpressivePalette palette;
+  const InterfaceDesign(this.style, {this.palette = ExpressivePalette.edge});
+
+  @override
+  InterfaceDesign copyWith({InterfaceStyle? style, ExpressivePalette? palette}) =>
+      InterfaceDesign(style ?? this.style, palette: palette ?? this.palette);
+
+  @override
+  InterfaceDesign lerp(covariant InterfaceDesign? other, double t) =>
+      other == null || t < .5 ? this : other;
+}
+
+bool isExpressive(BuildContext c) =>
+    Theme.of(c).extension<InterfaceDesign>()?.style == InterfaceStyle.expressive;
 
 /// ── COLOUR ────────────────────────────────────────────────────────────────
 ///
@@ -34,6 +58,9 @@ import 'package:flutter/material.dart';
 /// them fail AA on white. Run them through [P.on] (accent as text) or
 /// [P.fill] (accent as a filled surface under [P.inkOnFill]) first.
 class C {
+  // Edge's brand palette. Metric accents retain their meaning in each theme.
+  static const brandInk = Color(0xFF1E2A27);
+  static const brandMint = Color(0xFF7FB2A5);
   // primary
   static const green = Color(0xFF22C55E);
   static const greenD = Color(0xFF16A34A);
@@ -115,9 +142,26 @@ class C {
   /// adding it here means it ships unverified.
   static const all = <Color>[
     green, greenD, blue, purple, orange, red, teal, yellow, pink, indigo,
-    sky, blueSoft,
+    sky, blueSoft, brandMint,
     domHome, domHealth, domFood, domMove, domMind,
   ];
+}
+
+// Material tonal surface and accent roles from the four palette previews.
+// Precomputed using the pinned Material Color Utilities; no runtime generation.
+class _ExpressiveColors {
+  final Color bg, card, card2, ink, muted, primary, sleep, strain, track;
+  const _ExpressiveColors({
+    required this.bg,
+    required this.card,
+    required this.card2,
+    required this.ink,
+    required this.muted,
+    required this.primary,
+    required this.sleep,
+    required this.strain,
+    required this.track,
+  });
 }
 
 /// ── SURFACES + LEGIBLE INK ────────────────────────────────────────────────
@@ -125,28 +169,176 @@ class C {
 /// Brightness-resolved. `P.of(context)` in every build method.
 class P {
   final bool dark;
-  const P(this.dark);
+  final bool expressive;
+  final ExpressivePalette palette;
+  const P(this.dark, {this.expressive = false,
+      this.palette = ExpressivePalette.edge});
 
-  static P of(BuildContext c) => P(Theme.of(c).brightness == Brightness.dark);
+  static P of(BuildContext c) => P(Theme.of(c).brightness == Brightness.dark,
+      expressive: isExpressive(c),
+      palette: Theme.of(c).extension<InterfaceDesign>()?.palette ??
+          ExpressivePalette.edge);
 
-  Color get bg => dark ? const Color(0xFF0B1017) : C.n50;
-  Color get card => dark ? const Color(0xFF151C26) : C.white;
-  Color get card2 => dark ? const Color(0xFF1D2632) : C.n100;
-  Color get line => dark ? const Color(0xFF232D3B) : C.n200;
-  Color get track => dark ? const Color(0xFF232D3B) : C.n200;
+  _ExpressiveColors? get _colors => switch ((palette, dark)) {
+    (ExpressivePalette.edge, _) => null,
+    (ExpressivePalette.matteLime, false) => const _ExpressiveColors(
+      bg: Color(0xFFF9F9F9),
+      card: Color(0xFFEEEEEE),
+      card2: Color(0xFFE8E8E8),
+      ink: Color(0xFF1B1B1B),
+      muted: Color(0xFF474744),
+      primary: Color(0xFF406900),
+      sleep: Color(0xFF006492),
+      strain: Color(0xFF6C4F9D),
+      track: Color(0xFFE2E2E2),
+    ),
+    (ExpressivePalette.matteLime, true) => const _ExpressiveColors(
+      bg: Color(0xFF131313),
+      card: Color(0xFF1F1F1F),
+      card2: Color(0xFF2A2A2A),
+      ink: Color(0xFFE2E2E2),
+      muted: Color(0xFFC8C6C3),
+      primary: Color(0xFF9DD852),
+      sleep: Color(0xFF8BCEFF),
+      strain: Color(0xFFD5BBFF),
+      track: Color(0xFF353535),
+    ),
+    (ExpressivePalette.electricViolet, false) => const _ExpressiveColors(
+      bg: Color(0xFFFDF8FB),
+      card: Color(0xFFF1ECF0),
+      card2: Color(0xFFECE7EA),
+      ink: Color(0xFF1C1B1E),
+      muted: Color(0xFF48464B),
+      primary: Color(0xFF6D34E3),
+      sleep: Color(0xFF006685),
+      strain: Color(0xFF97480A),
+      track: Color(0xFFE6E1E4),
+    ),
+    (ExpressivePalette.electricViolet, true) => const _ExpressiveColors(
+      bg: Color(0xFF141315),
+      card: Color(0xFF201F22),
+      card2: Color(0xFF2B292C),
+      ink: Color(0xFFE6E1E4),
+      muted: Color(0xFFCAC5CB),
+      primary: Color(0xFFD0BCFF),
+      sleep: Color(0xFF6AD3FF),
+      strain: Color(0xFFFFB68C),
+      track: Color(0xFF363437),
+    ),
+    (ExpressivePalette.freshMint, false) => const _ExpressiveColors(
+      bg: Color(0xFFFAF9F7),
+      card: Color(0xFFEFEEEC),
+      card2: Color(0xFFE9E8E6),
+      ink: Color(0xFF1B1C1B),
+      muted: Color(0xFF444845),
+      primary: Color(0xFF006C52),
+      sleep: Color(0xFF00629F),
+      strain: Color(0xFF773DC4),
+      track: Color(0xFFE3E2E0),
+    ),
+    (ExpressivePalette.freshMint, true) => const _ExpressiveColors(
+      bg: Color(0xFF121413),
+      card: Color(0xFF1F201F),
+      card2: Color(0xFF292A29),
+      ink: Color(0xFFE3E2E0),
+      muted: Color(0xFFC4C7C4),
+      primary: Color(0xFF3BDFB0),
+      sleep: Color(0xFF9ACBFF),
+      strain: Color(0xFFD7BAFF),
+      track: Color(0xFF343534),
+    ),
+    (ExpressivePalette.warmAmber, false) => const _ExpressiveColors(
+      bg: Color(0xFFFFF8F3),
+      card: Color(0xFFF4ECE6),
+      card2: Color(0xFFEFE7E0),
+      ink: Color(0xFF1E1B17),
+      muted: Color(0xFF4C463E),
+      primary: Color(0xFF7F5700),
+      sleep: Color(0xFF006A68),
+      strain: Color(0xFF7449A8),
+      track: Color(0xFFE9E1DB),
+    ),
+    (ExpressivePalette.warmAmber, true) => const _ExpressiveColors(
+      bg: Color(0xFF16130F),
+      card: Color(0xFF221F1B),
+      card2: Color(0xFF2D2925),
+      ink: Color(0xFFE9E1DB),
+      muted: Color(0xFFCFC5BB),
+      primary: Color(0xFFFFBA40),
+      sleep: Color(0xFF5DD9D5),
+      strain: Color(0xFFDAB9FF),
+      track: Color(0xFF383430),
+    ),
+  };
 
-  Color get ink => dark ? const Color(0xFFF1F5F9) : C.n900;
-  Color get ink2 => dark ? const Color(0xFF94A3B8) : C.n600;
+  Color get seed => switch (palette) {
+    ExpressivePalette.edge => C.brandMint,
+    ExpressivePalette.matteLime => const Color(0xFFB6F36A),
+    ExpressivePalette.electricViolet => const Color(0xFF8854FF),
+    ExpressivePalette.freshMint => const Color(0xFF00C79A),
+    ExpressivePalette.warmAmber => const Color(0xFFECAA30),
+  };
+
+  Color get bg => expressive
+      ? (_colors?.bg ?? (dark ? C.brandInk : const Color(0xFFF4F7F5)))
+      : (dark ? const Color(0xFF0B1017) : C.n50);
+  Color get card => expressive
+      ? (_colors?.card ?? (dark ? const Color(0xFF283732) : const Color(0xFFE9F0EC)))
+      : (dark ? const Color(0xFF151C26) : C.white);
+  Color get card2 => expressive
+      ? (_colors?.card2 ?? (dark ? const Color(0xFF344741) : const Color(0xFFDCE7E1)))
+      : (dark ? const Color(0xFF1D2632) : C.n100);
+  Color get line => expressive
+      ? (_colors?.track ?? (dark ? const Color(0xFF425E55) : const Color(0xFFCFDDD6)))
+      : (dark ? const Color(0xFF232D3B) : C.n200);
+  Color get track => expressive ? line : (dark ? const Color(0xFF232D3B) : C.n200);
+
+  Color get ink => expressive
+      ? (_colors?.ink ?? (dark ? const Color(0xFFEFF4F1) : C.brandInk))
+      : (dark ? const Color(0xFFF1F5F9) : C.n900);
+  Color get ink2 => expressive
+      ? (_colors?.muted ?? (dark ? const Color(0xFFC1D2CC) : const Color(0xFF405C50)))
+      : (dark ? const Color(0xFF94A3B8) : C.n600);
 
   /// The muted caption ink. Hand-solved to clear 4.5:1 on [card2], the darkest
   /// (light theme) / lightest (dark theme) surface it can sit on — so it is
   /// legible on every surface, not just the one it was eyeballed against.
   /// The values it replaces measured 4.34:1 and 3.21:1 respectively.
-  Color get ink3 => dark ? const Color(0xFF7F8DA0) : const Color(0xFF627188);
+  Color get ink3 => expressive
+      ? (_colors?.muted ?? (dark ? const Color(0xFFB6C9C2) : const Color(0xFF4B6258)))
+      : (dark ? const Color(0xFF7F8DA0) : const Color(0xFF627188));
 
   /// The ink that goes on top of a [fill]. White by construction — [fill]
   /// darkens the accent until white clears AA on it.
   Color get inkOnFill => C.white;
+
+  Color _pigment(Color accent) {
+    if (!expressive) return accent;
+    final colors = _colors;
+    if (colors != null) {
+      return switch (accent) {
+        C.green || C.greenD || C.brandMint => colors.primary,
+        C.blue => colors.sleep,
+        C.purple => colors.strain,
+        _ => accent,
+      };
+    }
+    return switch (accent) {
+      C.green => C.brandMint,
+      C.greenD => const Color(0xFF668C7E),
+      C.blue => const Color(0xFF83AABD),
+      C.purple => const Color(0xFFACA4BE),
+      C.orange => const Color(0xFFD9A486),
+      C.red => const Color(0xFFC8847A),
+      C.teal => const Color(0xFF89B1A8),
+      C.yellow => const Color(0xFFC1B180),
+      C.pink => const Color(0xFFC797A8),
+      C.indigo => const Color(0xFF969EB7),
+      C.sky => const Color(0xFFB6CFD9),
+      C.blueSoft => const Color(0xFFA5C0CF),
+      _ => accent,
+    };
+  }
 
   /// [accent] rendered as TEXT on one of this brightness' surfaces, nudged
   /// toward the page ink until it clears [_aa] against the worst legal
@@ -160,14 +352,16 @@ class P {
   /// solver only ever nudges toward the page ink, so clearing the second
   /// surface cannot un-clear the first.
   Color on(Color accent) {
-    final toward = dark ? ink : C.n900;
+    accent = _pigment(accent);
+    final toward = dark || expressive ? ink : C.n900;
     final flat = _solve(accent, toward, card2, dark);
     return _solve(flat, toward, Color.alphaBlend(wash(accent), card2), dark);
   }
 
   /// [accent] rendered as a FILLED surface under [inkOnFill], darkened until
   /// white text on it clears [_aa]. Buttons, chips, CTA badges.
-  Color fill(Color accent) => _solve(accent, const Color(0xFF000000), C.white, false);
+  Color fill(Color accent) =>
+      _solve(_pigment(accent), const Color(0xFF000000), C.white, false);
 
   /// A tinted wash of [accent] — the InsightCard / Pill / active-tab
   /// background. Never carries text of its own colour; pair it with [on].
@@ -176,7 +370,8 @@ class P {
   /// solved against, and a caller asking for 1.6 was pushing muted ink to
   /// 2.99:1 on its own card. A wash darker than a wash is a fill.
   Color wash(Color accent, {double strength = 1}) =>
-      accent.withValues(alpha: (dark ? .18 : .11) * strength.clamp(0.0, 1.0));
+      _pigment(accent).withValues(
+          alpha: (dark ? .18 : .11) * strength.clamp(0.0, 1.0));
 
   List<BoxShadow> el(int level) {
     if (level <= 0) return const [];
@@ -351,6 +546,7 @@ class S {
   /// The minimum comfortable target, enforced inside `Pressable`. Apple HIG
   /// and WCAG 2.5.5 both land here.
   static const tap = 44.0;
+  static const navIcon = 26.0;
 }
 
 /// ── RADII ─────────────────────────────────────────────────────────────────
@@ -368,6 +564,11 @@ class R {
   static const rXl = BorderRadius.all(Radius.circular(xl));
   static const rXxl = BorderRadius.all(Radius.circular(xxl));
   static const rPill = BorderRadius.all(Radius.circular(pill));
+
+  static BorderRadius cardOf(BuildContext c) =>
+      isExpressive(c) ? rXxl : rLg;
+  static BorderRadius controlOf(BuildContext c) =>
+      isExpressive(c) ? rPill : rMd;
 }
 
 /// ── MOTION ── one gate, no exceptions ─────────────────────────────────────
@@ -386,6 +587,16 @@ class Motion {
   static const fast = Duration(milliseconds: 120);
   static const base = Duration(milliseconds: 180);
   static const slow = Duration(milliseconds: 280);
+  static const spatial = Duration(milliseconds: 460);
+
+  static Duration press(BuildContext c) =>
+      motion(c, isExpressive(c) ? spatial : fast);
+  static Curve spatialCurve(BuildContext c) =>
+      isExpressive(c) ? _SpatialSpring() : Curves.linear;
+
+  // Effects never overshoot: colour/opacity must stay within their endpoints.
+  static Curve effectsCurve(BuildContext c) =>
+      isExpressive(c) ? Curves.easeOutCubic : Curves.linear;
 
   /// The session clock. A live workout counts REAL seconds, so this is the one
   /// duration that must NOT pass through [motion] — reduced motion silences
@@ -407,6 +618,17 @@ class Motion {
   /// The ECG live-preview repaint cadence: incoming packets only mark the
   /// ring dirty, and the screen's clock repaints at most this often.
   static const ecgPreviewTick = Duration(milliseconds: 100);
+}
+
+/// M3 Expressive separates spatial springs from non-overshooting effects.
+/// https://m3.material.io/blog/m3-expressive-motion-theming
+class _SpatialSpring extends Curve {
+  static final _simulation = SpringSimulation(
+      SpringDescription.withDampingRatio(mass: 1, stiffness: 500, ratio: .8),
+      0, 1, 0);
+
+  @override
+  double transformInternal(double t) => _simulation.x(t * .46);
 }
 
 /// Collapse [d] to zero when the user has asked for reduced motion. Every
@@ -455,17 +677,56 @@ class _Gated extends PageTransitionsBuilder {
   }
 }
 
-ThemeData buildTheme(Brightness b) {
-  final p = P(b == Brightness.dark);
+ThemeData buildTheme(Brightness b,
+    {InterfaceStyle style = InterfaceStyle.original,
+     ExpressivePalette palette = ExpressivePalette.edge}) {
+  final expressive = style == InterfaceStyle.expressive;
+  final p = P(b == Brightness.dark, expressive: expressive, palette: palette);
+  final scheme = ColorScheme.fromSeed(
+      seedColor: expressive ? p.seed : C.green, brightness: b, surface: p.card);
   return ThemeData(
     brightness: b,
     scaffoldBackgroundColor: p.bg,
-    colorScheme:
-        ColorScheme.fromSeed(seedColor: C.green, brightness: b, surface: p.card),
+    colorScheme: expressive
+        ? scheme.copyWith(
+            surface: p.card, onSurface: p.ink, onSurfaceVariant: p.ink2,
+            surfaceContainerLow: p.bg, surfaceContainer: p.card,
+            surfaceContainerHigh: p.card2, surfaceContainerHighest: p.card2,
+            primary: p.fill(C.green), onPrimary: p.inkOnFill,
+            primaryContainer: Color.alphaBlend(p.wash(C.green), p.card),
+            onPrimaryContainer: p.on(C.green), outline: p.ink3,
+            outlineVariant: p.line)
+        : scheme,
+    extensions: [InterfaceDesign(style, palette: palette)],
     fontFamily: '.SF Pro Text',
     fontFamilyFallback: const ['Manrope'],
     splashFactory: NoSplash.splashFactory,
     highlightColor: const Color(0x00000000),
+    inputDecorationTheme: expressive
+        ? InputDecorationTheme(
+            filled: true, fillColor: p.card2,
+            labelStyle: F.cap.copyWith(color: p.ink2),
+            hintStyle: F.body.copyWith(color: p.ink3),
+            contentPadding: const EdgeInsets.all(S.x4),
+            border: OutlineInputBorder(borderRadius: R.rXl,
+                borderSide: BorderSide.none),
+            enabledBorder: OutlineInputBorder(borderRadius: R.rXl,
+                borderSide: BorderSide.none),
+            focusedBorder: OutlineInputBorder(borderRadius: R.rXl,
+                borderSide: BorderSide(color: p.on(C.green), width: 2)))
+        : null,
+    dialogTheme: expressive
+        ? DialogThemeData(backgroundColor: p.card,
+            shape: const RoundedRectangleBorder(borderRadius: R.rXxl),
+            titleTextStyle: F.t2.copyWith(color: p.ink),
+            contentTextStyle: F.body.copyWith(color: p.ink2))
+        : null,
+    bottomSheetTheme: expressive
+        ? BottomSheetThemeData(backgroundColor: p.card,
+            modalBackgroundColor: p.card,
+            shape: const RoundedRectangleBorder(
+                borderRadius: BorderRadius.vertical(top: Radius.circular(R.xxl))))
+        : null,
     pageTransitionsTheme: PageTransitionsTheme(builders: {
       for (final e in const PageTransitionsTheme().builders.entries)
         e.key: _Gated(e.value),

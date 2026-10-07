@@ -35,6 +35,7 @@ import '../../state/prefs.dart';
 import '../../state/units_controller.dart';
 import '../charts.dart';
 import '../grammar.dart';
+import '../sub_pages.dart';
 import '../paint_activity.dart';
 import '../profile/profile.dart';
 import '../screens/home_screen.dart' show unitsOf;
@@ -723,6 +724,7 @@ class _ActivitySummaryState extends State<ActivitySummary> {
     if (!identical(old.result, widget.result)) {
       _rated = null;
       _rpeDismissed = false;
+      tab = tab.clamp(0, _tabs.length - 1);
     }
   }
   Activity get a => r.activity;
@@ -978,7 +980,8 @@ class _ActivitySummaryState extends State<ActivitySummary> {
     // zero-span route (every fix at the same spot — a stationary GPS lock),
     // which would hide the export for a session `getWorkoutRoute` can still
     // export.
-    final canExportGpx = r.sessionId != null &&
+    final canExportGpx =
+        r.sessionId != null &&
         (arch == Arch.route || arch == Arch.journey) &&
         r.geo.length >= 2;
     final l = AppLocalizations.of(c);
@@ -986,67 +989,83 @@ class _ActivitySummaryState extends State<ActivitySummary> {
     return Scaffold(
       backgroundColor: p.bg,
       body: SafeArea(
-        child: Column(children: [
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: S.x4),
-            child: NavBar(
-              a.name,
-              sub: _shortDate(r.start).toUpperCase(),
-              // Each icon is a Pressable with S.tap's own 44 pt minimum hit
-              // box (grammar.dart's accessibility floor, not optional) —
-              // S.tap * n alone is short of that plus the gaps between them,
-              // which is exactly the RenderFlex overflow this avoids.
-              trailingWidth: iconCount == 1
-                  ? S.tap
-                  : S.tap * iconCount + S.x3 * (iconCount - 1),
-              trailing: Row(mainAxisSize: MainAxisSize.min, children: [
-                if (canChangeType) ...[
-                  Pressable(
-                    semanticLabel:
-                        l?.activitySummaryChangeType ?? 'Change activity type',
-                    onTap: () => _changeType(c),
-                    child: Icon(LucideIcons.pencil, size: 18, color: p.ink2),
-                  ),
-                  const SizedBox(width: S.x3),
-                ],
-                Pressable(
-                  semanticLabel: l?.activitySummaryShareThis(
-                          a.name.toLowerCase()) ??
-                      'Share this ${a.name.toLowerCase()}',
-                  onTap: () => Navigator.of(c).push(MaterialPageRoute(
-                      builder: (_) => ShareSheet(r))),
-                  child: Icon(LucideIcons.share2, size: 19, color: p.ink2),
-                ),
-              ]),
-            ),
-          ),
-          // A dedicated, plainly-labeled button rather than a bare icon in the
-          // nav bar — this is the one export action worth naming outright.
-          // Text only: no Strava logo/imagery, per the no-brand-assets policy
-          // (the brand name as plain text is fine, brand marks are not).
-          if (canExportGpx)
+        child: Column(
+          children: [
             Padding(
-              padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Pressable(
-                  onTap: () => _exportGpx(c),
-                  child: Row(mainAxisSize: MainAxisSize.min, children: [
-                    Icon(LucideIcons.upload, size: 16, color: p.ink2),
-                    const SizedBox(width: S.x2),
-                    Text(
-                        l?.activitySummaryShareToStrava ?? 'Share to Strava',
-                        style: F.body.copyWith(
-                            color: p.ink2, fontWeight: FontWeight.w600)),
-                  ]),
+              padding: const EdgeInsets.symmetric(horizontal: S.x4),
+              child: NavBar(
+                a.name,
+                sub: _shortDate(r.start).toUpperCase(),
+                // Each icon is a Pressable with S.tap's own 44 pt minimum hit
+                // box (grammar.dart's accessibility floor, not optional) —
+                // S.tap * n alone is short of that plus the gaps between them,
+                // which is exactly the RenderFlex overflow this avoids.
+                trailingWidth: iconCount == 1
+                    ? S.tap
+                    : S.tap * iconCount + S.x3 * (iconCount - 1),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (canChangeType) ...[
+                      Pressable(
+                        semanticLabel:
+                            l?.activitySummaryChangeType ??
+                            'Change activity type',
+                        onTap: () => _changeType(c),
+                        child: Icon(
+                          LucideIcons.pencil,
+                          size: 18,
+                          color: p.ink2,
+                        ),
+                      ),
+                      const SizedBox(width: S.x3),
+                    ],
+                    Pressable(
+                      semanticLabel:
+                          l?.activitySummaryShareThis(a.name.toLowerCase()) ??
+                          'Share this ${a.name.toLowerCase()}',
+                      onTap: () => Navigator.of(
+                        c,
+                      ).push(MaterialPageRoute(builder: (_) => ShareSheet(r))),
+                      child: Icon(LucideIcons.share2, size: 19, color: p.ink2),
+                    ),
+                  ],
                 ),
               ),
             ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: S.x4),
-            // Display labels are localized; `_tabs` itself stays the fixed
-            // English keys the switch below matches by NAME.
-            child: SubTabs(
+            // A dedicated, plainly-labeled button rather than a bare icon in the
+            // nav bar — this is the one export action worth naming outright.
+            // Text only: no Strava logo/imagery, per the no-brand-assets policy
+            // (the brand name as plain text is fine, brand marks are not).
+            if (canExportGpx)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, 0),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Pressable(
+                    onTap: () => _exportGpx(c),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(LucideIcons.upload, size: 16, color: p.ink2),
+                        const SizedBox(width: S.x2),
+                        Text(
+                          l?.activitySummaryShareToStrava ?? 'Share to Strava',
+                          style: F.body.copyWith(
+                            color: p.ink2,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: S.x4),
+              // Display labels are localized; `_tabs` itself stays the fixed
+              // English keys the switch below matches by NAME.
+              child: SubTabs(
                 [
                   for (final t in _tabs)
                     switch (t) {
@@ -1057,21 +1076,28 @@ class _ActivitySummaryState extends State<ActivitySummary> {
                 ],
                 tab,
                 (i) => setState(() => tab = i),
-                color: a.color),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(S.x4, S.x4, S.x4, S.x10),
-              // By NAME: the tab list is shorter for the archetypes that have
-              // no splits, so index 1 is not always the same tab.
-              children: switch (_tabs[tab]) {
-                'Overview' => _overview(c, p),
-                'Splits' => _splits(c, p),
-                _ => _graphs(c, p),
-              },
+                color: a.color,
+              ),
             ),
-          ),
-        ]),
+            Expanded(
+              child: SubPages(
+                index: tab,
+                count: _tabs.length,
+                onChanged: (i) => setState(() => tab = i),
+                builder: (c, i) => ListView(
+                  key: PageStorageKey('summary-tab-${_tabs[i]}'),
+                  padding: const EdgeInsets.fromLTRB(S.x4, S.x4, S.x4, S.x10),
+                  // Some archetypes have no Splits page.
+                  children: switch (_tabs[i]) {
+                    'Overview' => _overview(c, p),
+                    'Splits' => _splits(c, p),
+                    _ => _graphs(c, p),
+                  },
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1312,7 +1338,7 @@ class _ActivitySummaryState extends State<ActivitySummary> {
                       '${_distance!.$1.toStringAsFixed(2)} ${_distance!.$2}, '
                           'start and finish pinned.'),
               child: ClipRRect(
-                borderRadius: R.rLg,
+                borderRadius: p.expressive ? R.rXxl : R.rLg,
                 child: Container(
                   color: p.card2,
                   child: CustomPaint(
@@ -1409,7 +1435,7 @@ class _ActivitySummaryState extends State<ActivitySummary> {
           Container(
             height: 170,
             decoration: BoxDecoration(
-                borderRadius: R.rLg,
+                borderRadius: p.expressive ? R.rXxl : R.rLg,
                 color: p.wash(C.teal, strength: 1.6),
                 boxShadow: p.el(1)),
             child: Column(
@@ -1638,7 +1664,7 @@ class _ActivitySummaryState extends State<ActivitySummary> {
                     'Check band connection',
                 // The band, its battery and its link all live behind the
                 // profile's sources list. The CTA used to be paint.
-                onFix: () => openProfile(c),
+                destination: const ProfileHome(),
                 icon: LucideIcons.heartPulse,
               );
   }
@@ -2174,7 +2200,7 @@ class _ActivitySummaryState extends State<ActivitySummary> {
                 'This session recorded no per-minute streams.',
             fix: l?.activitySummaryCheckBandConnection ??
                 'Check band connection',
-            onFix: () => openProfile(c),
+            destination: const ProfileHome(),
             icon: LucideIcons.chartLine,
           ),
       ];
