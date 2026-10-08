@@ -388,7 +388,7 @@ class _CircadianTabState extends State<CircadianTab> with RevisionReload {
           )
         else if (_loading && _d == null) ...[
           const SizedBox(height: S.x8),
-          const Center(child: CircularProgressIndicator()),
+          const Center(child: MotionLoadingIndicator()),
         ] else ...[
           Text(
             l?.sleepBodyClockCurrentSummary ??

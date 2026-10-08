@@ -194,6 +194,7 @@ class CycleTab extends StatefulWidget {
 
 class _CycleTabState extends State<CycleTab> with RevisionReload {
   CycleData? _d;
+  bool _failed = false;
 
   /// The symptom look-back is folded away by default — the chips above it are
   /// what she opened the tab to tap.
@@ -223,12 +224,14 @@ class _CycleTabState extends State<CycleTab> with RevisionReload {
   void reload() => _load();
 
   Future<void> _load() async {
+    if (!mounted) return;
     final t = beginRead(#cycle);
+    setState(() => _failed = false);
     try {
       final d = await CycleData.load(context.read<AppState>());
       if (stillNewest(#cycle, t)) setState(() => _d = d);
     } catch (_) {
-      if (stillNewest(#cycle, t)) setState(() => _d = const CycleData());
+      if (stillNewest(#cycle, t)) setState(() => _failed = true);
     }
   }
 
@@ -343,7 +346,17 @@ class _CycleTabState extends State<CycleTab> with RevisionReload {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
     final d = _d;
-    if (d == null) return const Center(child: CircularProgressIndicator());
+    if (_failed) {
+      return StatusCard(
+        l?.dataReadFailedTitle ?? 'Could not load your data',
+        l?.dataReadFailedBody ??
+            'Your saved data could not be read. Try again.',
+        fix: l?.homeMetricRetry ?? 'Retry',
+        icon: LucideIcons.databaseZap,
+        onFix: _load,
+      );
+    }
+    if (d == null) return const Center(child: MotionLoadingIndicator());
 
     if (!d.enabled) {
       return StatusCard(

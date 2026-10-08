@@ -238,7 +238,7 @@ class _NutritionScreenState extends State<NutritionScreen> with RevisionReload {
               padding: const EdgeInsets.fromLTRB(S.x4, 0, S.x4, S.x16),
               children: [
                 if (_loading)
-                  const Center(child: CircularProgressIndicator())
+                  const Center(child: MotionLoadingIndicator())
                 else
                   [_todayTab, _weekTab, _goalsTab][i](c),
               ],

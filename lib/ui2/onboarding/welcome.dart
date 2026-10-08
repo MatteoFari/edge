@@ -605,7 +605,7 @@ class WelcomeView extends StatelessWidget {
             ),
             if (busy) ...[
               const SizedBox(height: S.x6),
-              Center(child: CircularProgressIndicator(color: p.on(C.blue))),
+              Center(child: MotionLoadingIndicator(color: p.on(C.blue))),
             ],
             if (o != null) ...[
               const SizedBox(height: S.x6),

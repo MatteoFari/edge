@@ -258,6 +258,8 @@ void main() {
         find.byKey(const ValueKey('detail-morph-surface')),
         findsOneWidget,
       );
+      expect(find.byType(RawImage), findsNothing,
+          reason: 'Returning must not replay the opening card snapshot');
       await t.pumpAndSettle();
       expect(find.byType(_Detail), findsNothing);
       expect(t.getRect(find.byKey(const ValueKey('source-card'))), origin);

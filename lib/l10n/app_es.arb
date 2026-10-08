@@ -2898,5 +2898,11 @@
       "type": "String"
     }
   }
-}
+},
+  "dataReadFailedTitle": "No se pudieron cargar tus datos",
+  "dataReadFailedBody": "No se pudieron leer los datos guardados. Inténtalo de nuevo.",
+  "aiBriefingUnknownProvider": "El proveedor y el modelo no se guardaron con este resumen. Abajo se muestran los datos usados para generarlo.",
+  "dataLoading": "Cargando",
+  "homeSleepAgainstBaseline": "frente a la base de {span}",
+  "@homeSleepAgainstBaseline": {"description": "Completed sleep compared with the observed reference, when no prospective target was saved for that night.", "placeholders": {"span": {"type": "String"}}}
 }

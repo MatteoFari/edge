@@ -250,7 +250,7 @@ class _JournalComposeState extends State<JournalCompose> {
                 sub: _date, onBack: () => Navigator.of(c).pop()),
             Expanded(
               child: _loading
-                  ? const Center(child: CircularProgressIndicator())
+                  ? const Center(child: MotionLoadingIndicator())
                   : ListView(
                       padding: const EdgeInsets.fromLTRB(S.x4, 0, S.x4, S.x8),
                       children: [
@@ -1034,7 +1034,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                             ? SizedBox(
                                 width: 18,
                                 height: 18,
-                                child: CircularProgressIndicator(
+                                child: MotionLoadingIndicator(
                                     strokeWidth: 2, color: p.inkOnFill),
                               )
                             : Icon(LucideIcons.arrowUp, color: p.inkOnFill),

@@ -235,7 +235,7 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
       [
         if (_loading && _d == null) ...[
           const SizedBox(height: S.x8),
-          const Center(child: CircularProgressIndicator()),
+          const Center(child: MotionLoadingIndicator()),
         ] else ...[
           if (v == null) ...[
             // No `why:`. The pipeline records why readiness abstained on every

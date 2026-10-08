@@ -2869,5 +2869,11 @@
       "type": "String"
     }
   }
-}
+},
+  "dataReadFailedTitle": "Impossible de charger vos données",
+  "dataReadFailedBody": "Les données enregistrées n’ont pas pu être lues. Réessayez.",
+  "aiBriefingUnknownProvider": "Le fournisseur et le modèle n’ont pas été enregistrés avec ce bilan. Les données utilisées figurent ci-dessous.",
+  "dataLoading": "Chargement",
+  "homeSleepAgainstBaseline": "par rapport à la base de {span}",
+  "@homeSleepAgainstBaseline": {"description": "Completed sleep compared with the observed reference, when no prospective target was saved for that night.", "placeholders": {"span": {"type": "String"}}}
 }

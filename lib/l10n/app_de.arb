@@ -2988,5 +2988,11 @@
       "type": "String"
     }
   }
-}
+},
+  "dataReadFailedTitle": "Daten konnten nicht geladen werden",
+  "dataReadFailedBody": "Die gespeicherten Daten konnten nicht gelesen werden. Versuche es erneut.",
+  "aiBriefingUnknownProvider": "Anbieter und Modell wurden für diesen Bericht nicht gespeichert. Unten stehen die damals verwendeten Daten.",
+  "dataLoading": "Wird geladen",
+  "homeSleepAgainstBaseline": "zur Basis von {span}",
+  "@homeSleepAgainstBaseline": {"description": "Completed sleep compared with the observed reference, when no prospective target was saved for that night.", "placeholders": {"span": {"type": "String"}}}
 }

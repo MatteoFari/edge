@@ -775,7 +775,7 @@ class _SleepDetailState extends State<SleepDetail> with RevisionReload {
     if (_loading && (_d == null || (_day != null && _day != d.day))) {
       return _nightPage(const [
         SizedBox(height: S.x8),
-        Center(child: CircularProgressIndicator()),
+        Center(child: MotionLoadingIndicator()),
       ]);
     }
 
@@ -1323,6 +1323,7 @@ class _SleepDetailState extends State<SleepDetail> with RevisionReload {
     List<SleepStage?> stages,
     Map<String, dynamic> n,
   ) => Scrubber(
+    horizontalDragToScrub: true,
     value: _scrub,
     onChanged: (v) => setState(() => _scrub = v),
     label: AppLocalizations.of(c)?.sleepDetailHypnogramLabel ?? 'Hypnogram',

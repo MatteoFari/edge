@@ -61,6 +61,7 @@ void main() {
     WidgetTester t,
     Widget child, {
     double scale = 1,
+    bool reduced = true,
     Brightness brightness = Brightness.dark,
   }) async {
     t.view.physicalSize = const Size(390, 844);
@@ -87,7 +88,7 @@ void main() {
           builder: (c, child) => MediaQuery(
             data: MediaQuery.of(c).copyWith(
               textScaler: TextScaler.linear(scale),
-              disableAnimations: true,
+              disableAnimations: reduced,
             ),
             child: child!,
           ),
@@ -241,7 +242,7 @@ void main() {
   testWidgets(
     'instruction editor returns to staged preferences and saves only its own field',
     (t) async {
-      await mount(t, const CoachPersonalization());
+      await mount(t, const CoachPersonalization(), reduced: false);
       await t.tap(find.byKey(const ValueKey('coach-choice-sleep')));
       final custom = find.text('Custom instructions');
       await t.scrollUntilVisible(
@@ -256,6 +257,10 @@ void main() {
       );
       await t.pumpAndSettle();
       await t.tap(custom);
+      await t.pump();
+      await t.pump(const Duration(milliseconds: 80));
+      final transitions = t.widgetList<FadeTransition>(find.byType(FadeTransition));
+      expect(transitions.any((w) => w.opacity.value > 0 && w.opacity.value < 1), isTrue);
       await settle(t);
       final field = find.byKey(const ValueKey('coach-custom-instructions'));
       await t.enterText(field, 'Keep answers practical');

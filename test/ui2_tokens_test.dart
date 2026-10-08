@@ -269,6 +269,9 @@ const _notComponents = {
   // tabs and drill-downs
   'HomeScreen', 'HealthScreen', 'WorkoutScreen', 'NutritionScreen',
   'WellnessScreen', 'CycleTab', 'MetricDetail', 'ReadinessDetail',
+  // Full-width planning rows share their coverage with Home and Night;
+  // sleep_planning_ui_test exercises missing estimates and large text.
+  'SleepPlanSummary',
   'SleepDetail', 'CircadianDetail', 'CircadianTab', 'DayStrainDetail', 'DayStepsDetail',
   'ZonesDetail',
   // Reads the day bundle AND the raw beat store to draw one night's Poincaré

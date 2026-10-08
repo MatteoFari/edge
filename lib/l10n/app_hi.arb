@@ -2869,5 +2869,11 @@
       "type": "String"
     }
   }
-}
+},
+  "dataReadFailedTitle": "डेटा लोड नहीं हो सका",
+  "dataReadFailedBody": "सहेजा गया डेटा पढ़ा नहीं जा सका। फिर कोशिश करें।",
+  "aiBriefingUnknownProvider": "इस सारांश के साथ प्रदाता और मॉडल सहेजे नहीं गए थे। नीचे उस समय इस्तेमाल किया गया डेटा है।",
+  "dataLoading": "लोड हो रहा है",
+  "homeSleepAgainstBaseline": "{span} आधार की तुलना में",
+  "@homeSleepAgainstBaseline": {"description": "Completed sleep compared with the observed reference, when no prospective target was saved for that night.", "placeholders": {"span": {"type": "String"}}}
 }

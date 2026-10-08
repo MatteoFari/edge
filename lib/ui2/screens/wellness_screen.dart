@@ -249,7 +249,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
               children: [
                 for (final w in <Widget>[
                   if (_loading)
-                    const Center(child: CircularProgressIndicator())
+                    const Center(child: MotionLoadingIndicator())
                   else if (_loadError)
                     StatusCard(
                       l?.wellnessLoadErrorTitle ?? 'Could not load Wellness',
@@ -630,7 +630,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
                 ],
               ),
             ),
-          ] else
+          ] else ...[
             Surface(
               pad: const EdgeInsets.symmetric(horizontal: S.x4),
               child: Column(
@@ -649,6 +649,31 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
                 ],
               ),
             ),
+            if (_meds.any(
+              (d) => d.schedule.any(
+                (sch) => !_slots.any(
+                  (s) => s.def.key == d.key && s.slotMin == sch.minuteOfDay,
+                ),
+              ),
+            )) ...[
+              const SizedBox(height: S.x3),
+              Surface(
+                pad: const EdgeInsets.symmetric(vertical: S.x2),
+                child: Column(
+                  children: [
+                    for (final d in _meds)
+                      for (final sch in d.schedule)
+                        if (!_slots.any(
+                          (s) =>
+                              s.def.key == d.key &&
+                              s.slotMin == sch.minuteOfDay,
+                        ))
+                          _scheduleRow(c, d, sch),
+                  ],
+                ),
+              ),
+            ],
+          ],
           Section(
             l?.wellnessAdherence ?? 'Adherence',
             // An empty denominator is not an adherence of nothing. Consistency
@@ -1395,7 +1420,7 @@ class _JournalFindingsState extends State<JournalFindings> {
     if (_loading) {
       return detailScaffold(c, title, const [
         SizedBox(height: S.x8),
-        Center(child: CircularProgressIndicator()),
+        Center(child: MotionLoadingIndicator()),
       ]);
     }
     if (_loadError) {

@@ -1299,6 +1299,8 @@ _RingState _ringOf(HomeRingKind k, HomeData d, AppLocalizations? l) {
     case HomeRingKind.sleep:
       final v = d.sleepMin.value;
       final need = d.sleepTargetMin.value;
+      final reference = d.sleepReferenceMin.value;
+      final comparison = need ?? reference;
       return v == null
           ? _gap(
               k,
@@ -1318,12 +1320,15 @@ _RingState _ringOf(HomeRingKind k, HomeData d, AppLocalizations? l) {
               LucideIcons.moon,
               C.blue,
               value: hm(v),
-              // Only the target saved before this night can scale its ring.
-              // The next sleep's recommendation belongs in the expanded plan.
-              sub: need == null
-                  ? (l?.sleepDetailTimeAsleep ?? 'Time asleep')
-                  : (l?.homeOfSpan(hm(need)) ?? 'of ${hm(need)}'),
-              frac: need == null || need <= 0 ? null : v / need,
+              // Prefer the target saved for this night. Older nights may use
+              // a labelled observed-baseline comparison, never the next plan.
+              sub: need != null
+                  ? (l?.homeOfSpan(hm(need)) ?? 'of ${hm(need)}')
+                  : reference != null
+                  ? (l?.homeSleepAgainstBaseline(hm(reference)) ??
+                      'vs baseline ${hm(reference)}')
+                  : (l?.sleepDetailTimeAsleep ?? 'Time asleep'),
+              frac: comparison == null || comparison <= 0 ? null : v / comparison,
             );
   }
 }
@@ -1989,7 +1994,7 @@ class _MetricPreviewBodyState extends State<_MetricPreviewBody>
       );
     }
     if (_data == null) {
-      return Center(child: CircularProgressIndicator(color: p.on(C.green)));
+      return Center(child: MotionLoadingIndicator(color: p.on(C.green)));
     }
     final preview = buildHomeMetricPreview(c, _data!, widget.kind);
     // Recovery fits its chart around the measured readings in this space.
@@ -2288,6 +2293,10 @@ class HomeData {
 
   /// The inspected night's prospective target, distinct from the next plan.
   final Metric sleepTargetMin;
+
+  /// Observed longer-sleep reference, shown explicitly as a comparison when
+  /// this night predates saved targets. Never the next night's recommendation.
+  final Metric sleepReferenceMin;
   final Metric bedtime;
   final Map<String, dynamic>? strainTarget;
 
@@ -2339,6 +2348,7 @@ class HomeData {
     this.stepGoal = kDefaultStepGoal,
     this.sleepNeedMin = Metric.empty,
     this.sleepTargetMin = Metric.empty,
+    this.sleepReferenceMin = Metric.empty,
     this.bedtime = Metric.empty,
     this.strainTarget,
     this.heldOverNight,
@@ -2366,6 +2376,7 @@ class HomeData {
     stepGoal: stepGoal,
     sleepNeedMin: sleepNeedMin,
     sleepTargetMin: sleepTargetMin,
+    sleepReferenceMin: sleepReferenceMin,
     bedtime: bedtime,
     strainTarget: strainTarget,
     heldOverNight: heldOverNight,
@@ -2375,6 +2386,22 @@ class HomeData {
     insightsStale: insightsStale,
     absentDiag: absentDiag,
   );
+
+  static Metric _sleepReference(Map<String, dynamic> insights) {
+    final plan = insights['sleep_planning'];
+    final reference = plan is Map ? plan['reference'] : null;
+    final seconds = reference is Map ? reference['reference_sec'] : null;
+    if (seconds is! num || !seconds.isFinite || seconds <= 0) {
+      return Metric.empty;
+    }
+    final metric = metricOf({
+      'value': seconds / 60,
+      'confidence': plan['reference_confidence'],
+      'tier': 'ESTIMATE',
+    });
+    return metric.isEmpty ? Metric.empty : metric;
+  }
+
 
   /// A day OTHER than today, for the Home day switcher.
   ///
@@ -2390,6 +2417,7 @@ class HomeData {
     LocalRepository repo,
     String date, [
     AppLocalizations? l,
+    Metric sleepReferenceMin = Metric.empty,
   ]) async {
     final profile = await repo.getProfile();
     final overview = await repo.getDayOverview(date);
@@ -2417,6 +2445,7 @@ class HomeData {
       caloriesTotal: metricOf(strain['calories_total']),
       sleepMin: metricOf(sleep['duration_min']),
       sleepTargetMin: metricOf(sleep['need_min']),
+      sleepReferenceMin: sleepReferenceMin,
       stepGoal: (profile['step_goal'] as num?)?.toInt() ?? kDefaultStepGoal,
     );
   }
@@ -2447,7 +2476,9 @@ class HomeData {
     if (current != null &&
         lastSleep != null &&
         calendarDaysBetween(lastSleep, current) > 0) {
-      return loadForDay(repo, status['last_sleep_day'].toString(), l);
+      final insights = await repo.getInsights();
+      return loadForDay(repo, status['last_sleep_day'].toString(), l,
+          _sleepReference(insights));
     }
     return _loadToday(repo, today, l);
   }
@@ -2509,6 +2540,7 @@ class HomeData {
       strain: metricOf(d('strain')),
       sleepMin: overnightMetric(today, s('duration_min'), l),
       sleepTargetMin: overnightMetric(today, s('need_min'), l),
+      sleepReferenceMin: _sleepReference(cd),
       rhr: overnightMetric(today, d('resting_hr'), l),
       steps: metricOf(d('steps')),
       calories: metricOf(d('calories')),
@@ -3069,7 +3101,7 @@ class _HomeHeaderPillState extends State<_HomeHeaderPill> {
                                           key: const ValueKey('sync-spinner'),
                                           width: S.x5,
                                           height: S.x5,
-                                          child: CircularProgressIndicator(
+                                          child: MotionLoadingIndicator(
                                             strokeWidth: 2,
                                             color: color,
                                           ),
@@ -3267,6 +3299,8 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
   void _goDay(String day) {
     setState(() {
       _day = day;
+      _d = null;
+      _failed = false;
       _expanded = null;
       _loading = true;
     });
@@ -3306,7 +3340,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
     final spinner = SizedBox(
       width: 16,
       height: 16,
-      child: CircularProgressIndicator(strokeWidth: 2, color: P.of(c).ink3),
+      child: MotionLoadingIndicator(strokeWidth: 2, color: P.of(c).ink3),
     );
 
     if (syncing) {
@@ -3454,7 +3488,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
             ],
             if (!expressive) const DetectedActivitiesCard(),
             if (_loading)
-              const Center(child: CircularProgressIndicator())
+              const Center(child: MotionLoadingIndicator())
             else if (_failed)
               StatusCard(
                 l?.homeLoadFailedTitle ?? 'Today could not be read',

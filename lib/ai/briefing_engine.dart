@@ -511,6 +511,8 @@ class BriefingEngine {
       BriefingStore.write(b);
       return b;
     }
+    final providerOrigin = coachEndpointOrigin(config.apiBase);
+    final model = config.model;
     final raw = await (complete ??
         (({required String system, required String user}) =>
             CoachEngine.completeText(
@@ -530,6 +532,8 @@ class BriefingEngine {
       breakdownMd: parsed.breakdownMd,
       generatedAtMs: effectiveNow.millisecondsSinceEpoch,
       inputs: inputs,
+      providerOrigin: providerOrigin,
+      model: model,
     );
     BriefingStore.write(b);
     return b;

@@ -250,7 +250,7 @@ class _Field extends StatelessWidget {
               style: F.over.copyWith(color: p.ink3)),
         ]),
         const SizedBox(height: S.x1),
-        TextField(
+        Semantics(label: label, child: TextField(
           controller: controller,
           keyboardType: TextInputType.number,
           style: F.head.copyWith(color: p.ink),
@@ -264,7 +264,7 @@ class _Field extends StatelessWidget {
             focusedBorder: UnderlineInputBorder(
                 borderSide: BorderSide(color: p.on(C.green))),
           ),
-        ),
+        )),
         const SizedBox(height: S.x1),
         Text(consequence, style: F.cap.copyWith(color: p.ink3)),
       ]),

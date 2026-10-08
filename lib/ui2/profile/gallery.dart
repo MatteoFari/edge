@@ -707,6 +707,7 @@ final _psd = List<double>.generate(64, (i) => (i < 20 ? 40 - i : 26 - i * .3)
 
 Map<String, Widget> extraCases() => {
       'expressive_loading_indicator': const ExpressiveLoadingIndicator(phase: .35),
+      'motion_loading_indicator': const MotionLoadingIndicator(),
       // The edge treatment that tells a horizontal row it continues. Swept
       // rather than photographed because the state worth seeing is the one a
       // still cannot hold: it is ABSENT when the content fits, present when it

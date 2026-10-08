@@ -193,7 +193,7 @@ class _WeightImportSettingsState extends State<WeightImportSettings> {
           if (_busy)
             const Padding(
               padding: EdgeInsets.only(top: S.x3),
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: MotionLoadingIndicator()),
             ),
           if (status != null)
             Padding(

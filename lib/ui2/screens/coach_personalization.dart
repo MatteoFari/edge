@@ -454,13 +454,6 @@ class _CoachPersonalizationState extends State<CoachPersonalization> {
   @override
   Widget build(BuildContext c) {
     final p = P.of(c), l = AppLocalizations.of(c)!, prefs = _prefs;
-    if (_editingInstructions && _store != null) {
-      return CoachCustomInstructions(
-        store: _store!,
-        embedded: widget.embedded,
-        onBack: () => _editInstructions(false),
-      );
-    }
     final body = Column(
       children: [
         if (!widget.embedded)
@@ -478,7 +471,7 @@ class _CoachPersonalizationState extends State<CoachPersonalization> {
                   ),
                 )
               : prefs == null
-              ? const Center(child: CircularProgressIndicator())
+              ? const Center(child: MotionLoadingIndicator())
               : ListView(
                   padding: const EdgeInsets.fromLTRB(S.x5, S.x4, S.x5, S.x4),
                   children: [
@@ -623,13 +616,32 @@ class _CoachPersonalizationState extends State<CoachPersonalization> {
           ),
       ],
     );
-    if (widget.embedded) return body;
-    return PopScope(
+    final page = widget.embedded ? body : PopScope(
       canPop: !_saving,
       child: Scaffold(
         backgroundColor: p.card,
         body: SafeArea(child: body),
       ),
+    );
+    return AnimatedSwitcher(
+      duration: motion(c, Motion.spatialFast),
+      switchInCurve: Motion.effectsCurve(c),
+      switchOutCurve: Motion.effectsCurve(c),
+      transitionBuilder: (child, animation) => FadeTransition(
+        opacity: animation,
+        child: ScaleTransition(
+          scale: Tween<double>(begin: .975, end: 1).animate(animation),
+          alignment: Alignment.topCenter,
+          child: child,
+        ),
+      ),
+      child: _editingInstructions && _store != null
+          ? CoachCustomInstructions(
+              key: const ValueKey('coach-instructions-page'),
+              store: _store!, embedded: widget.embedded,
+              onBack: () => _editInstructions(false),
+            )
+          : KeyedSubtree(key: const ValueKey('coach-preferences-page'), child: page),
     );
   }
 }

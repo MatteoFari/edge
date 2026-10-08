@@ -1978,7 +1978,7 @@ class _EditProfileViewState extends State<EditProfileView> {
     final l = AppLocalizations.of(c);
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Text(label, style: F.over.copyWith(color: p.ink3)),
-      TextField(
+      Semantics(label: label, child: TextField(
         controller: ctl,
         keyboardType: kind,
         style: F.head.copyWith(color: p.ink),
@@ -1992,7 +1992,7 @@ class _EditProfileViewState extends State<EditProfileView> {
           focusedBorder:
               UnderlineInputBorder(borderSide: BorderSide(color: p.on(C.green))),
         ),
-      ),
+      )),
     ]);
   }
 }

@@ -38,6 +38,19 @@ class _HoldingStore extends CoachStore {
   }
 }
 
+class _DelayedReadStore extends CoachStore {
+  _DelayedReadStore(super.db, super.owner);
+  final started = Completer<void>(), release = Completer<void>();
+  @override
+  Future<Map<String, Object?>?> read(String id) async {
+    if (id == 'slow') {
+      started.complete();
+      await release.future;
+    }
+    return super.read(id);
+  }
+}
+
 http.Response answer(String text) => http.Response(
   jsonEncode({
     'choices': [
@@ -105,6 +118,38 @@ void main() {
     onStatus: status ?? (_) {},
     confirm: confirm ?? (_) async => true,
   );
+
+  test('late saved-chat loads cannot replace the latest selection or a new chat', () async {
+    Future<void> row(String id) => store.save({
+      'id': id, 'title': id, 'created_ms': 1, 'updated_ms': 1,
+      'history_json': '[]', 'transcript_json': '[]', 'draft': id,
+      'scroll_offset': 0.0, 'retry_json': null, 'search_text': id, 'preview': '',
+    });
+    await row('slow');
+    await row('fast');
+    final delayed = _DelayedReadStore(db, 'local');
+    final engine = CoachEngine(config: cfg, api: repo, store: delayed);
+    addTearDown(engine.requestDispose);
+    final older = engine.openSession('slow');
+    await delayed.started.future;
+    await engine.openSession('fast');
+    delayed.release.complete();
+    await older;
+    expect(engine.sessionId, 'fast');
+    expect(engine.draft, 'fast');
+
+    final nextStore = _DelayedReadStore(db, 'local');
+    final nextEngine = CoachEngine(config: cfg, api: repo, store: nextStore);
+    addTearDown(nextEngine.requestDispose);
+    final loading = nextEngine.openSession('slow');
+    await nextStore.started.future;
+    nextEngine.newSession();
+    final newId = nextEngine.sessionId;
+    nextStore.release.complete();
+    await loading;
+    expect(nextEngine.sessionId, newId);
+    expect(nextEngine.draft, isEmpty);
+  });
 
   test(
     'switching while a provider is in flight preserves original reply and both drafts',

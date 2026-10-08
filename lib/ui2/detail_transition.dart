@@ -184,7 +184,10 @@ class _DetailMorphRoute<T> extends MaterialPageRoute<T> {
                 children: [
                   ColoredBox(color: Color.lerp(color, p.bg, t)!),
                   Opacity(opacity: content, child: child),
-                  if (snapshot != null && source > 0)
+                  // The source card may have changed while its detail was open.
+                  // Reveal the live card on return, not the old captured state.
+                  if (snapshot != null && source > 0 &&
+                      animation.status != AnimationStatus.reverse)
                     Positioned(
                       left: rect.left,
                       top: rect.top,

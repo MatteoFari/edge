@@ -503,7 +503,9 @@ dependencies:
       # on top of 27b0ba4. Adds fixed-grid sleep respiratory tracking without
       # changing standard RSA/readiness. Opt in with EXPERIMENTAL_RESPIRATION.
       # Published on feat/experimental-respiration; pin the full commit SHA.
-      ref: cdec755e4dc12f3b41cbc81eec79d8b3ed7b322d
+      # Adds observed-history sleep planning at 62e1b99 (algorithm 112/113).
+      # Published on the personal fork’s feat/sleep-planning branch.
+      ref: 62e1b999e44af203a79c600dbdfa8ce9943219d1
 
   # BLE — flutter_blue_plus is the maintained cross-platform GATT client.
   flutter_blue_plus: ^1.36.8

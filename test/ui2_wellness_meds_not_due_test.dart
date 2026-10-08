@@ -37,7 +37,8 @@ void main() {
   });
   tearDown(ClockFormatController.debugReset);
 
-  testWidgets('a medication with nothing due today says so', (t) async {
+  for (final withDue in [false, true]) {
+  testWidgets(withDue ? 'non-due medication stays editable when another is due' : 'a medication with nothing due today says so', (t) async {
     t.view.physicalSize = const Size(390 * 3, 844 * 3);
     t.view.devicePixelRatio = 3;
     addTearDown(t.view.reset);
@@ -59,6 +60,12 @@ void main() {
           schedule: [MedSchedule(8 * 60, [tomorrow])],
         ),
       );
+      if (withDue) {
+        await MedDb.putDef(db, MedDef(key: 'due', label: 'Due medication',
+          createdAt: DateTime.now().subtract(const Duration(days: 1)).millisecondsSinceEpoch,
+          schedule: [MedSchedule(8 * 60, [DateTime.now().weekday])],
+        ));
+      }
     });
 
     final app = AppState.forTesting();
@@ -99,11 +106,12 @@ void main() {
     expect(find.byType(CircularProgressIndicator), findsNothing,
         reason: 'the tab never loaded, so nothing after this is a test');
     // Not "Nothing scheduled" — something IS scheduled, just not today.
-    expect(find.text('Nothing due today'), findsOneWidget);
+    expect(find.text('Nothing due today'), withDue ? findsNothing : findsOneWidget);
     expect(find.text('Nothing scheduled'), findsNothing);
     // What you take and when, which is the reason itself.
     expect(find.text('Vitamin D'), findsOneWidget);
     expect(find.textContaining('08:00'), findsWidgets);
-    expect(find.byType(MedRow), findsNothing);
+    expect(find.byType(MedRow), withDue ? findsOneWidget : findsNothing);
   }, timeout: const Timeout(Duration(seconds: 60)));
+  }
 }

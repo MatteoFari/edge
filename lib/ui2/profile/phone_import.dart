@@ -372,7 +372,7 @@ class _PhoneImportState extends State<PhoneImport> {
                   if (_busy) ...[
                     const SizedBox(height: S.x6),
                     Center(
-                      child: CircularProgressIndicator(color: p.on(C.blue)),
+                      child: MotionLoadingIndicator(color: p.on(C.blue)),
                     ),
                   ],
                   if (_note != null && _note!.isNotEmpty) ...[

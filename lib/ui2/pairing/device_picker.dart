@@ -571,7 +571,7 @@ class _NearbySection extends StatelessWidget {
                 const SizedBox(
                   width: 16,
                   height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2),
+                  child: MotionLoadingIndicator(strokeWidth: 2),
                 ),
               ]),
             ),

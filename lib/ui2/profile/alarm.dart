@@ -726,10 +726,11 @@ class AlarmScreenView extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            l?.alarmNextLabel ?? 'NEXT',
-                            style: F.over.copyWith(color: p.ink3),
-                          ),
+                          if (at.isAfter(now ?? DateTime.now()))
+                            Text(
+                              l?.alarmNextLabel ?? 'NEXT',
+                              style: F.over.copyWith(color: p.ink3),
+                            ),
                           const SizedBox(height: S.x1),
                           Text(
                             _dayAndTime(c, at),
@@ -929,7 +930,7 @@ class AlarmScreenView extends StatelessWidget {
   static String _whichDay(BuildContext c, DateTime d, DateTime now) {
     final l = AppLocalizations.of(c);
     final days = calendarDaysBetween(now, d);
-    if (days < 0) {
+    if (!d.isAfter(now)) {
       return l?.alarmInThePast ??
           'In the past — it has already fired or been missed';
     }

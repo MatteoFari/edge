@@ -345,10 +345,10 @@ void main() {
     await t.pumpAndSettle();
     await t.tap(find.text('Sleep need breakdown'));
     await _frames(t);
-    expect(find.text("Tonight's need"), findsNothing);
+    expect(find.text('Next sleep recommendation'), findsNothing);
     expect(find.text('Target bedtime'), findsNothing);
     for (final label in [
-      'Sleep debt',
+      'Recent sleep shortfall',
       'Added for strain',
       'Credited from naps',
       'Target wake',
@@ -378,8 +378,8 @@ void main() {
           await t.tap(find.text('Sleep need breakdown'));
           await _frames(t);
           for (final label in [
-            "Tonight's need",
-            'Sleep debt',
+            'Next sleep recommendation',
+            'Recent sleep shortfall',
             'Added for strain',
             'Credited from naps',
             'Target bedtime',

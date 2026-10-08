@@ -260,7 +260,7 @@ class _BeatsState extends State<Beats> {
         if (_loading)
           const Padding(
             padding: EdgeInsets.only(top: S.x8),
-            child: Center(child: CircularProgressIndicator()),
+            child: Center(child: MotionLoadingIndicator()),
           )
         else if (d.day == null)
           StatusCard(

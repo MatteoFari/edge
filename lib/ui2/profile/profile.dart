@@ -186,11 +186,12 @@ Future<void> _pickLanguage(BuildContext c) async {
     backgroundColor: p.card,
     showDragHandle: true,
     builder: (sheet) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      child: ListView(
+        shrinkWrap: true,
         children: [
           for (final code in options)
             ListTile(
+              selected: ctrl.code == code,
               title: Text(_languageLabel(sheet, code), style: F.body.copyWith(color: p.ink)),
               trailing: ctrl.code == code
                   ? Icon(LucideIcons.check, size: 18, color: p.on(C.blue))

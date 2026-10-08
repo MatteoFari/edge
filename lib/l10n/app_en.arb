@@ -14563,5 +14563,11 @@
       "type": "String"
     }
   }
-}
+},
+  "dataReadFailedTitle": "Could not load your data",
+  "dataReadFailedBody": "Your saved data could not be read. Try again.",
+  "aiBriefingUnknownProvider": "The provider and model were not saved with this briefing. The inputs below are its saved snapshot.",
+  "dataLoading": "Loading",
+  "homeSleepAgainstBaseline": "vs baseline {span}",
+  "@homeSleepAgainstBaseline": {"description": "Completed sleep compared with the observed reference, when no prospective target was saved for that night.", "placeholders": {"span": {"type": "String"}}}
 }

@@ -937,8 +937,8 @@ packages:
     dependency: "direct main"
     description:
       path: "."
-      ref: cdec755e4dc12f3b41cbc81eec79d8b3ed7b322d
-      resolved-ref: cdec755e4dc12f3b41cbc81eec79d8b3ed7b322d
+      ref: "62e1b999e44af203a79c600dbdfa8ce9943219d1"
+      resolved-ref: "62e1b999e44af203a79c600dbdfa8ce9943219d1"
       url: "https://github.com/MatteoFari/analytics.git"
     source: git
     version: "1.0.0"

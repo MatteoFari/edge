@@ -173,6 +173,7 @@ class _CoachScreenState extends State<CoachScreen> {
   final _input = TextEditingController();
   final _inputFocus = FocusNode(debugLabel: 'Coach composer');
   final _scroll = ScrollController();
+  bool _followOutput = true, _userScrolling = false;
   double _topDrag = 0;
   bool _pullStartedAtTop = false, _pulledAtTop = false;
   bool _busy = false;
@@ -322,6 +323,7 @@ class _CoachScreenState extends State<CoachScreen> {
         _scroll.jumpTo(
           engine.scrollOffset.clamp(0, _scroll.position.maxScrollExtent),
         );
+        _followOutput = _scroll.position.extentAfter < S.tap;
       }
     });
   }
@@ -339,6 +341,7 @@ class _CoachScreenState extends State<CoachScreen> {
     final origin = engine.sessionId;
     if (_submitting.contains(origin) || engine.isSending) return;
     _submitting.add(origin);
+    _followOutput = true;
     _chatStatuses[origin] = 'preparing';
     _stopped.remove(origin);
     setState(() {
@@ -369,7 +372,7 @@ class _CoachScreenState extends State<CoachScreen> {
               ..clear()
               ..addAll(engine.transcript);
           });
-          _scrollDown();
+          if (_followOutput) _scrollDown();
         },
         onStatus: (status) {
           _chatStatuses[origin] = status;
@@ -409,7 +412,7 @@ class _CoachScreenState extends State<CoachScreen> {
             _input.text = engine.draft;
           }
         });
-        _scrollDown();
+        if (_followOutput) _scrollDown();
       }
       if (mounted) unawaited(_refreshTitle());
       if (wrote) await app.refreshAiReminders();
@@ -553,8 +556,9 @@ class _CoachScreenState extends State<CoachScreen> {
 
   Future<void> _openSession(String id) async {
     if (_changingChat) return;
-    await _saveView();
+    setState(() => _changingChat = true);
     try {
+      await _saveView();
       await _engine?.openSession(id);
       if (mounted) {
         setState(_restoreView);
@@ -569,13 +573,16 @@ class _CoachScreenState extends State<CoachScreen> {
           ),
         );
       }
+    } finally {
+      if (mounted) setState(() => _changingChat = false);
     }
   }
 
   void _scrollDown() {
-    if (!mounted || !widget.presented) return;
+    if (!mounted || !widget.presented || _page != _CoachPage.chat) return;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && widget.presented && _scroll.hasClients) {
+      if (mounted && widget.presented && _page == _CoachPage.chat &&
+          _followOutput && _scroll.hasClients) {
         final duration = motion(context, Motion.slow);
         if (duration == Duration.zero) {
           _scroll.jumpTo(_scroll.position.maxScrollExtent);
@@ -778,12 +785,15 @@ class _CoachScreenState extends State<CoachScreen> {
       return false;
     }
     if (event is ScrollStartNotification) {
+      _userScrolling = event.dragDetails != null;
       _topDrag = 0;
       _pulledAtTop = false;
       _pullStartedAtTop =
           event.dragDetails != null &&
           event.metrics.pixels <= event.metrics.minScrollExtent;
     } else if (event is ScrollEndNotification) {
+      if (_userScrolling) _followOutput = event.metrics.extentAfter < S.tap;
+      _userScrolling = false;
       _pullStartedAtTop = false;
       _topDrag = 0;
     } else if (_pullStartedAtTop &&
@@ -805,6 +815,7 @@ class _CoachScreenState extends State<CoachScreen> {
         }
       }
     }
+    if (_userScrolling) _followOutput = event.metrics.extentAfter < S.tap;
     return false;
   }
 
@@ -884,7 +895,7 @@ class _CoachScreenState extends State<CoachScreen> {
           physics: physics,
           padding: bodyPadding,
           children: [
-            const Center(child: CircularProgressIndicator()),
+            const Center(child: MotionLoadingIndicator()),
             Text(l?.coachChatsLoading ?? 'Loading conversations…'),
           ],
         );

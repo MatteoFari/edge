@@ -338,6 +338,9 @@ class _AiBriefingScreenState extends State<AiBriefingScreen> {
                       key: ValueKey('briefing-payload-${b.id}'),
                       inputs: b.inputs,
                       config: cfg,
+                      providerOrigin: b.providerOrigin,
+                      model: b.model,
+                      savedBriefing: true,
                       asked: b.calledModel,
                     ),
                   ],
@@ -404,6 +407,8 @@ class _AiBriefingScreenState extends State<AiBriefingScreen> {
 class SentPayload extends StatefulWidget {
   final Map<String, dynamic> inputs;
   final CoachConfig config;
+  final String? providerOrigin, model;
+  final bool savedBriefing;
 
   /// Whether a model was called at all — [Briefing.calledModel]. False for a
   /// nightly sweep that found nothing: there was no request, so the banner may
@@ -414,6 +419,9 @@ class SentPayload extends StatefulWidget {
     super.key,
     required this.inputs,
     required this.config,
+    this.providerOrigin,
+    this.model,
+    this.savedBriefing = false,
     this.asked = true,
   });
 
@@ -448,8 +456,11 @@ class _SentPayloadState extends State<SentPayload> {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
     final config = widget.config;
-    final host = Uri.tryParse(config.apiBase)?.host ?? config.apiBase;
-    final local = SentPayload.isLocal(config.apiBase);
+    final base = widget.savedBriefing ? widget.providerOrigin : config.apiBase;
+    final model = widget.savedBriefing ? widget.model : config.model;
+    final unknown = base == null || model == null;
+    final host = base == null ? '' : (Uri.tryParse(base)?.host ?? base);
+    final local = base != null && SentPayload.isLocal(base);
     final keys = widget.inputs.keys.toList()..sort();
     // An empty payload is not "we sent an empty payload". The nightly sweep
     // calls no model at all on a day with no finding, so the banner must not go
@@ -527,16 +538,16 @@ class _SentPayloadState extends State<SentPayload> {
                                       ? (l?.aiBriefingNoneBody ??
                                             'Nothing. There was no request — the note above was '
                                                 'written on this phone.')
+                                      : unknown
+                                      ? (l?.aiBriefingUnknownProvider ??
+                                            'The provider and model were not saved with this briefing. The inputs below are its saved snapshot.')
                                       : local
                                       ? (l?.aiBriefingLocalBody(host) ??
                                             'These numbers went to $host, on this machine. '
                                                 'Nothing left it.')
-                                      : (l?.aiBriefingCloudBody(
-                                              host,
-                                              config.model,
-                                            ) ??
+                                      : (l?.aiBriefingCloudBody(host, model) ??
                                             'These numbers, and nothing else, were sent to '
-                                                '$host as ${config.model}. No raw '
+                                                '$host as $model. No raw '
                                                 'recordings, no name, no identifier.'),
                                   style: F.cap.copyWith(
                                     color: p.ink,

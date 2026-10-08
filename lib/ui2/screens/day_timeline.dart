@@ -793,7 +793,7 @@ class _DayTimelineScreenState extends State<DayTimelineScreen> {
       ...dayNavRow(_day ?? d.day, d.days, _goDay),
       if (_loading) ...[
         const SizedBox(height: S.x8),
-        const Center(child: CircularProgressIndicator()),
+        const Center(child: MotionLoadingIndicator()),
       ] else ...[
         ...timelineBody(c, d),
       ],

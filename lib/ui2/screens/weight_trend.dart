@@ -8,7 +8,7 @@ import '../../data/weight_store.dart';
 import '../../l10n/app_localizations.dart';
 import '../ui2.dart';
 import '../profile/weight_import_settings.dart';
-import 'home_screen.dart' show unitsOf;
+import 'home_screen.dart' show unitsOf, prettyDay;
 import 'metric_detail.dart' show detailScaffold;
 
 const kWeightTrendDays = 180;
@@ -41,6 +41,7 @@ class _WeightTrendScreenState extends State<WeightTrendScreen> {
   Map<String, WeightReading> _byDay = const {};
   bool _loading = true, _failed = false;
   int _loadGeneration = 0;
+  int? _pick;
   @override
   void initState() {
     super.initState();
@@ -65,6 +66,7 @@ class _WeightTrendScreenState extends State<WeightTrendScreen> {
       if (mounted && generation == _loadGeneration) {
         setState(() {
           _byDay = rows;
+          _pick = null;
           _loading = false;
         });
       }
@@ -86,7 +88,7 @@ class _WeightTrendScreenState extends State<WeightTrendScreen> {
     if (_loading) {
       return detailScaffold(c, title, const [
         SizedBox(height: S.x8),
-        Center(child: CircularProgressIndicator()),
+        Center(child: MotionLoadingIndicator()),
       ]);
     }
     if (_failed) {
@@ -114,8 +116,7 @@ class _WeightTrendScreenState extends State<WeightTrendScreen> {
     final span = first == null
         ? 0
         : calendarDaysBetween(first, DateTime.parse(days.last));
-    double show(double kg) =>
-        u == null ? kg : (double.tryParse(u.weightField(kg)) ?? kg);
+    double show(double kg) => u?.weightValue(kg) ?? kg;
     final vals = <double?>[
       if (first != null)
         for (var i = 0; i <= span; i++)
@@ -165,20 +166,28 @@ class _WeightTrendScreenState extends State<WeightTrendScreen> {
             yAxis: axis,
             xLabels: [days.first, days.last],
             series: vals,
-            footnote:
-                l?.weightTrendSources ?? 'Days without readings stay empty.',
+            footnote: _pick == null
+                ? (l?.weightTrendSources ?? 'Days without readings stay empty.')
+                : _pointLabel(c, first!, vals, _pick!),
             empty: axis == null ? const NoData() : null,
             child: axis == null
                 ? const SizedBox.shrink()
                 : RepaintBoundary(
-                    child: CustomPaint(
-                      size: Size.infinite,
-                      painter: LineChart(
-                        vals,
-                        p.on(C.blue),
-                        fill: false,
-                        t: animate(c, 1),
-                        axis: axis,
+                    child: Scrubber(
+                      value: _pick == null ? null : _pick! / (vals.length - 1),
+                      step: 1 / (vals.length - 1),
+                      label: l?.journalComposeSevenDayTrend ?? 'Seven-day trend',
+                      describe: (v) => _pointLabel(c, first!, vals,
+                          (v * (vals.length - 1)).round()),
+                      onChanged: (v) => setState(() =>
+                          _pick = (v * (vals.length - 1)).round()),
+                      child: CustomPaint(
+                        size: Size.infinite,
+                        painter: LineChart(
+                          vals, p.on(C.blue), fill: false,
+                          t: animate(c, 1), axis: axis,
+                          selectedX: _pick == null ? null : _pick! / (vals.length - 1),
+                        ),
                       ),
                     ),
                   ),
@@ -194,6 +203,15 @@ class _WeightTrendScreenState extends State<WeightTrendScreen> {
       const WeightImportSettings(),
     ]);
   }
+  String _pointLabel(BuildContext c, DateTime first, List<double?> vals, int i) {
+    final day = dayLabelOf(DateTime(first.year, first.month, first.day + i));
+    final value = vals[i];
+    final unit = unitsOf(c)?.isImperial == true ? 'lb' : 'kg';
+    final reading = value == null ? '—' :
+        '${displayNumber(value, AppLocalizations.of(c), decimals: 2)} $unit';
+    return '${prettyDay(day, AppLocalizations.of(c))} · $reading';
+  }
+
 }
 
 /// Weight appears even without band data; it reads only the independent ledger.

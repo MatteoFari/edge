@@ -55,6 +55,10 @@ class Briefing {
   /// were actually present — absent metrics are never fabricated).
   final Map<String, dynamic> inputs;
 
+  /// Historical request provenance, without API keys or URL credentials.
+  /// Null for legacy notes whose provider was never saved.
+  final String? providerOrigin, model;
+
   const Briefing({
     String? id,
     required this.day,
@@ -63,6 +67,8 @@ class Briefing {
     required this.breakdownMd,
     required this.generatedAtMs,
     required this.inputs,
+    this.providerOrigin,
+    this.model,
   }) : _storedId = id;
 
   /// Identity of one generated note, preserved when its cache slot is read.
@@ -99,6 +105,8 @@ class Briefing {
         'breakdown_md': breakdownMd,
         'generated_at_ms': generatedAtMs,
         'inputs': inputs,
+        if (providerOrigin != null) 'provider_origin': providerOrigin,
+        if (model != null) 'model': model,
       };
 
   static Briefing? fromJson(dynamic j) {
@@ -119,6 +127,8 @@ class Briefing {
       inputs: j['inputs'] is Map
           ? (j['inputs'] as Map).cast<String, dynamic>()
           : const {},
+      providerOrigin: j['provider_origin'] is String ? j['provider_origin'] : null,
+      model: j['model'] is String ? j['model'] : null,
     );
   }
 }

@@ -245,7 +245,7 @@ class _NapsScreenState extends State<NapsScreen> {
       return detailScaffold(c, l?.napsTitle ?? 'Naps', const [
         Padding(
           padding: EdgeInsets.only(top: S.x8),
-          child: Center(child: CircularProgressIndicator()),
+          child: Center(child: MotionLoadingIndicator()),
         ),
       ]);
     }

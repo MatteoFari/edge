@@ -775,7 +775,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
     if (_loading && _d == null) {
       return const Padding(
         padding: EdgeInsets.only(top: S.x8),
-        child: Center(child: CircularProgressIndicator()),
+        child: Center(child: MotionLoadingIndicator()),
       );
     }
     return Column(
@@ -1328,7 +1328,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
           else
             const Padding(
               padding: EdgeInsets.only(top: S.x8),
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: MotionLoadingIndicator()),
             ),
         ],
       );
@@ -1558,7 +1558,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
               })
             : const Padding(
                 padding: EdgeInsets.only(top: S.x8),
-                child: Center(child: CircularProgressIndicator()),
+                child: Center(child: MotionLoadingIndicator()),
               ),
       ]);
     }
@@ -1725,7 +1725,7 @@ class _HealthScreenState extends State<HealthScreen> with RevisionReload {
             })
           : const Padding(
               padding: EdgeInsets.only(top: S.x8),
-              child: Center(child: CircularProgressIndicator()),
+              child: Center(child: MotionLoadingIndicator()),
             );
     }
 

@@ -172,6 +172,8 @@ void main() {
         label:
             'START A SESSION. 71 activities. Pick one and go. Choose activity',
         isButton: true,
+        isFocusable: true,
+        hasFocusAction: true,
         hasTapAction: true,
       ),
     );

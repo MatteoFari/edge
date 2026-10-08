@@ -474,6 +474,19 @@ void main() {
     });
   });
 
+  test('saved briefing retains request provenance across provider changes', () {
+    final b = Briefing(day: '2026-10-08', period: BriefingPeriod.morning,
+      oneLiner: 'Rest well', breakdownMd: '', generatedAtMs: 1,
+      inputs: const {'hrv': 62}, providerOrigin: 'https://example.com', model: 'original');
+    final restored = Briefing.fromJson(b.toJson())!;
+    expect(restored.providerOrigin, 'https://example.com');
+    expect(restored.model, 'original');
+    final legacy = Map<String, dynamic>.from(b.toJson())
+      ..remove('provider_origin')..remove('model');
+    expect(Briefing.fromJson(legacy)!.providerOrigin, isNull);
+    expect(Briefing.fromJson(legacy)!.model, isNull);
+  });
+
   test('journal-done flag round-trips per day', () {
     expect(BriefingStore.journalDoneToday(), isFalse);
     BriefingStore.markJournalDone();

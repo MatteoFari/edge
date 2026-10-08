@@ -85,26 +85,26 @@ void main() {
   });
 
   group('exportWorkout delete-then-write', () {
-    // The host VM is neither iOS nor macOS, so `HealthExporter.isApple` is
-    // false and these exercise the Health-Connect reading of `delete`.
+    // The exporter follows its host platform. The pure policy tests above
+    // cover both branches; macOS also exercises the empty HealthKit range.
     late _FakeHealthStore store;
 
     tearDown(() => store.remove());
 
-    test('a failed delete does not write a duplicate on top of it', () async {
+    test('a false delete follows the platform empty-range policy', () async {
       store = _FakeHealthStore(deleteResult: false)..install();
 
       final ok = await HealthExporter().exportWorkout(_session());
 
-      expect(ok, isFalse, reason: 'the caller must retry this workout');
+      expect(ok, HealthExporter.isApple,
+          reason: 'Health Connect retries; HealthKit permits a first export');
       expect(store.calls, contains('delete'));
       expect(
         store.calls,
-        isNot(contains('writeWorkoutData')),
-        reason:
-            'the previously exported copy survived the delete, so writing '
-            'would leave two of this workout in the store — and the false '
-            'return drives a retry that would write a third',
+        HealthExporter.isApple
+            ? contains('writeWorkoutData')
+            : isNot(contains('writeWorkoutData')),
+        reason: 'A failed Android delete must never be followed by a write',
       );
     });
 

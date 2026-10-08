@@ -1020,6 +1020,55 @@ void main() {
     );
   }
 
+  testWidgets('streaming preserves the position while reading older messages', (t) async {
+    await config.save(baseUrl: 'http://127.0.0.1:11434/v1', model: 'test');
+    File('${dir.path}/coach_idx_local.json').writeAsStringSync(jsonEncode([
+      {'id': 'read', 'title': 'Long chat', 'updatedAt': 1, 'preview': 'Hello'},
+    ]));
+    File('${dir.path}/coach_s_local_read.json').writeAsStringSync(jsonEncode({
+      'title': 'Long chat',
+      'transcript': [for (var i = 0; i < 50; i++) {'kind': 'user', 'text': 'Older message $i'}],
+    }));
+    final previousHttp = HttpOverrides.current;
+    final provider = _DelayedToolProvider(streamReply: true);
+    HttpOverrides.global = provider;
+    addTearDown(() => HttpOverrides.global = previousHttp);
+    await mount(t, reduced: true);
+    await open(t);
+    for (var i = 0; i < 20 && find.text('Long chat').evaluate().isEmpty; i++) {
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await t.pump();
+    }
+    await t.enterText(find.byKey(const ValueKey('coach-composer-input')), 'Tell me more');
+    await t.pump();
+    await t.tap(find.byKey(const ValueKey('coach-composer-send')));
+    for (var i = 0; i < 30 && provider.client.requests.isEmpty; i++) {
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await t.pump();
+    }
+    expect(provider.client.requests, hasLength(1));
+    final list = find.descendant(of: find.byType(CoachScreen), matching: find.byWidgetPredicate((w) => w is ListView && w.controller != null));
+    final scroll = t.widget<ListView>(list).controller!;
+    await t.pump(const Duration(milliseconds: 100));
+    await t.drag(list, const Offset(0, 300));
+    await t.pump(const Duration(seconds: 1));
+    final offset = scroll.offset;
+    expect(scroll.position.extentAfter, greaterThan(S.tap));
+    provider.client.reply.add(utf8.encode('data: ${jsonEncode({'choices': [{'index': 0, 'delta': {'content': 'A new streamed answer. ' * 100}}]})}\n\n'));
+    for (var i = 0; i < 10; i++) {
+      await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 20)));
+      await t.pump(const Duration(milliseconds: 40));
+    }
+    expect(scroll.offset, closeTo(offset, .5));
+    provider.client.reply.add(utf8.encode('data: [DONE]\n\n'));
+    await t.runAsync(() => provider.client.reply.close());
+    await t.pump(const Duration(seconds: 1));
+    expect(scroll.offset, closeTo(offset, .5));
+    await t.pumpWidget(const SizedBox.shrink());
+    await t.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 100)));
+    await t.pump();
+  });
+
   testWidgets('top overscroll reveals and bottom overscroll hides', (t) async {
     await mount(t, physics: const ClampingScrollPhysics());
     final list = find.byKey(const ValueKey('page-list'));

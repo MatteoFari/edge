@@ -2869,5 +2869,11 @@
       "type": "String"
     }
   }
-}
+},
+  "dataReadFailedTitle": "无法加载数据",
+  "dataReadFailedBody": "无法读取已保存的数据。请重试。",
+  "aiBriefingUnknownProvider": "此简报未保存服务提供商和模型信息。下面是生成简报时使用的数据。",
+  "dataLoading": "正在加载",
+  "homeSleepAgainstBaseline": "与基准 {span} 比较",
+  "@homeSleepAgainstBaseline": {"description": "Completed sleep compared with the observed reference, when no prospective target was saved for that night.", "placeholders": {"span": {"type": "String"}}}
 }

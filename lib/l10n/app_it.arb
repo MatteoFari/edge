@@ -14563,5 +14563,11 @@
       "type": "String"
     }
   }
-}
+},
+  "dataReadFailedTitle": "Impossibile caricare i dati",
+  "dataReadFailedBody": "Non è stato possibile leggere i dati salvati. Riprova.",
+  "aiBriefingUnknownProvider": "Il fornitore e il modello non sono stati salvati con questo riepilogo. Qui sotto trovi i dati usati per generarlo.",
+  "dataLoading": "Caricamento",
+  "homeSleepAgainstBaseline": "rispetto alla base di {span}",
+  "@homeSleepAgainstBaseline": {"description": "Completed sleep compared with the observed reference, when no prospective target was saved for that night.", "placeholders": {"span": {"type": "String"}}}
 }

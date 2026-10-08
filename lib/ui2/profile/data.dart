@@ -385,7 +385,7 @@ class _DataScreenState extends State<DataScreen> {
                 ]),
                 if (_busy) ...[
                   const SizedBox(height: S.x6),
-                  Center(child: CircularProgressIndicator(color: p.on(C.blue))),
+                  Center(child: MotionLoadingIndicator(color: p.on(C.blue))),
                 ],
                 if (_note != null && _note!.isNotEmpty) ...[
                   const SizedBox(height: S.x5),

@@ -34,6 +34,7 @@ import 'dart:ui' show SemanticsRole;
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show LogicalKeyboardKey;
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../data/journal_fields.dart' show formatMinuteOfDay;
@@ -65,6 +66,36 @@ class ExpressiveLoadingIndicator extends StatelessWidget {
       ),
     ),
   );
+}
+
+/// Loading stays visible when the user asks the app to avoid animation.
+class MotionLoadingIndicator extends StatelessWidget {
+  const MotionLoadingIndicator({
+    super.key,
+    this.color,
+    this.strokeWidth = 4,
+    this.value,
+  });
+  final Color? color;
+  final double strokeWidth;
+  final double? value;
+
+  @override
+  Widget build(BuildContext c) {
+    final label = AppLocalizations.of(c)?.dataLoading ?? 'Loading';
+    if (value == null && !Motion.enabled(c)) {
+      // The static arc indicates activity, not 75% progress.
+      return Semantics(label: label, child: ExcludeSemantics(
+        child: CircularProgressIndicator(
+          color: color, strokeWidth: strokeWidth, value: .75,
+        ),
+      ));
+    }
+    return CircularProgressIndicator(
+      color: color, strokeWidth: strokeWidth, value: value,
+      semanticsLabel: label,
+    );
+  }
 }
 
 /// ── PRESSABLE ── the only gesture primitive in lib/ui2 ────────────────────
@@ -101,6 +132,7 @@ class Pressable extends StatefulWidget {
 
 class _PressableState extends State<Pressable> {
   bool _down = false;
+  bool _focused = false;
 
   @override
   Widget build(BuildContext c) {
@@ -122,7 +154,7 @@ class _PressableState extends State<Pressable> {
           ? out
           : Semantics(label: widget.semanticLabel, child: out);
     }
-    return Semantics(
+    final control = Semantics(
       button: true,
       label: widget.semanticLabel,
       child: GestureDetector(
@@ -138,6 +170,26 @@ class _PressableState extends State<Pressable> {
           child: out,
         ),
       ),
+    );
+    return FocusableActionDetector(
+      onShowFocusHighlight: (focused) => setState(() => _focused = focused),
+      shortcuts: const {
+        SingleActivator(LogicalKeyboardKey.enter): ActivateIntent(),
+        SingleActivator(LogicalKeyboardKey.space): ActivateIntent(),
+      },
+      actions: {
+        ActivateIntent: CallbackAction<ActivateIntent>(onInvoke: (_) {
+          widget.onTap?.call();
+          return null;
+        }),
+      },
+      child: _focused ? DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: R.rSm,
+          border: Border.all(color: P.of(c).ink, width: 2),
+        ),
+        child: control,
+      ) : control,
     );
   }
 }
@@ -204,6 +256,9 @@ class Scrubber extends StatelessWidget {
   /// scrubs without taking ordinary horizontal or vertical scroll gestures.
   final bool longPressToScrub;
 
+  /// Claim horizontal inspection before an enclosing swipeable tab does.
+  final bool horizontalDragToScrub;
+
   final Widget child;
 
   const Scrubber({
@@ -215,6 +270,7 @@ class Scrubber extends StatelessWidget {
     required this.child,
     this.step = .05,
     this.longPressToScrub = false,
+    this.horizontalDragToScrub = false,
   });
 
   @override
@@ -246,6 +302,15 @@ class Scrubber extends StatelessWidget {
               onTapUp: (e) => set(e.localPosition),
               onLongPressStart: (e) => set(e.localPosition),
               onLongPressMoveUpdate: (e) => set(e.localPosition),
+              child: child,
+            );
+          }
+          if (horizontalDragToScrub) {
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (e) => set(e.localPosition),
+              onHorizontalDragStart: (e) => set(e.localPosition),
+              onHorizontalDragUpdate: (e) => set(e.localPosition),
               child: child,
             );
           }

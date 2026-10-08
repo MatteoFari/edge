@@ -266,6 +266,7 @@ class CoachEngine {
   // OpenAI-format running history (system is added per-request) — the context we
   // resend every turn so the model remembers the conversation.
   _CoachSession _current = _CoachSession(CoachStore.newId());
+  int _sessionSelectionRevision = 0;
   final Map<String, _CoachSession> _sessions = {};
   final Map<String, _CoachRequest> _requests = {};
   final Set<String> _completionOnly = {};
@@ -438,11 +439,13 @@ class CoachEngine {
   }
 
   void newSession() {
+    _sessionSelectionRevision++;
     _current = _CoachSession(CoachStore.newId());
     _sessions[_current.id] = _current;
   }
 
   Future<void> openSession(String id) async {
+    final revision = ++_sessionSelectionRevision;
     final cached = _sessions[id];
     if (cached != null) {
       _current = cached;
@@ -460,7 +463,7 @@ class CoachEngine {
     session.transcript.addAll(parsed.$2);
     session.retry = parsed.$3;
     _sessions[id] = session;
-    _current = session;
+    if (revision == _sessionSelectionRevision) _current = session;
   }
 
   static Future<

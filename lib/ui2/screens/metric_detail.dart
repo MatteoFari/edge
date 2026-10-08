@@ -716,7 +716,8 @@ class _MetricDetailState extends State<MetricDetail> {
   /// preference.
   int _range = 0;
   MetricData? _d;
-  bool _loading = true;
+  bool _loading = true, _failed = false;
+  int _readRevision = 0;
 
   /// The slot the user has put a finger on, as an index into the DENSE window.
   /// Null until they touch the chart. A window change clears it: slot 12 of a
@@ -824,9 +825,11 @@ class _MetricDetailState extends State<MetricDetail> {
     // modal sheet the user can dismiss by leaving the screen. Guarded here and
     // not at each call site — one guard where every caller already routes.
     if (!mounted) return;
+    final revision = ++_readRevision;
+    setState(() => (_loading = true, _failed = false));
     final repo = repoOf(context);
     if (repo == null) {
-      if (mounted) setState(() => _loading = false);
+      setState(() => (_loading = false, _failed = true));
       return;
     }
     try {
@@ -862,11 +865,13 @@ class _MetricDetailState extends State<MetricDetail> {
         if (!mounted) return;
         winners = resolved;
       }
-      if (mounted) {
+      if (mounted && revision == _readRevision) {
         setState(() => (_d = d, _winners = winners, _loading = false));
       }
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && revision == _readRevision) {
+        setState(() => (_loading = false, _failed = true));
+      }
     }
   }
 
@@ -875,6 +880,17 @@ class _MetricDetailState extends State<MetricDetail> {
     final l = AppLocalizations.of(c);
     final spec = specOf(widget.metricKey, AppLocalizations.of(context));
     final d = _d ?? const MetricData();
+    if (_failed) {
+      return detailScaffold(c, spec.title, [
+        StatusCard(
+          l?.homeMetricLoadFailed ?? 'Could not load this summary',
+          l?.dataReadFailedBody ?? 'Your saved data could not be read. Try again.',
+          fix: l?.homeMetricRetry ?? 'Retry',
+          icon: LucideIcons.databaseZap,
+          onFix: _load,
+        ),
+      ]);
+    }
 
     final all = widget.day == null
         ? d.series
@@ -915,7 +931,7 @@ class _MetricDetailState extends State<MetricDetail> {
         _ranges(c, d, spec.color),
         const SizedBox(height: S.x5),
         if (_loading)
-          const Center(child: CircularProgressIndicator())
+          const Center(child: MotionLoadingIndicator())
         else
           StatusCard(
             win == 1
@@ -1339,9 +1355,12 @@ class _MetricDetailState extends State<MetricDetail> {
             // Slot 0 is `length - 1` days behind today, not `length` — the
             // last slot IS today. A 30-slot window spans 29 days of distance.
             xLabels: [
-              l?.metricDetailDaysAgoLabel(series.length - 1) ??
-                  '${series.length - 1} day${series.length == 2 ? '' : 's'} ago',
-              l?.metricDetailToday ?? 'Today',
+              widget.day != null && widget.day != todayLabel()
+                  ? prettyDay(dayLabelOf(DateTime(_end.year, _end.month,
+                      _end.day - (series.length - 1))), l)
+                  : (l?.metricDetailDaysAgoLabel(series.length - 1) ??
+                      '${series.length - 1} day${series.length == 2 ? '' : 's'} ago'),
+              _labelsOf(c).first,
             ],
             // The dots are already beside the big number two rows up; twice on
             // one card reads as two different claims.
@@ -1896,7 +1915,7 @@ class _DayHeartRateHistoryState extends State<_DayHeartRateHistory>
           const SizedBox(height: S.x2),
         ],
         if (_loading)
-          const Center(child: CircularProgressIndicator())
+          const Center(child: MotionLoadingIndicator())
         else if (_failed)
           StatusCard(
             l?.healthCouldNotRead(title) ?? 'Could not read your heart rate',
