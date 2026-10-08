@@ -40,6 +40,7 @@ import '../../health/health_rhr_seed.dart';
 import '../../l10n/app_localizations.dart';
 import '../ui2.dart';
 import 'devices.dart' show formatDayTime;
+import 'weight_import_settings.dart';
 
 /// The kinds SD-12 imports, in the order they are shown, with the label and the
 /// unit each is stored in.
@@ -204,6 +205,8 @@ class _PhoneImportState extends State<PhoneImport> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(S.x4, 0, S.x4, S.x10),
                 children: [
+                  const WeightImportSettings(),
+                  const SizedBox(height: S.x4),
                   // ── seed-baselines ──────────────────────────────────────────
                   Section(
                     l?.phoneImportRhrSection ?? 'Resting heart rate',
@@ -351,7 +354,7 @@ class _PhoneImportState extends State<PhoneImport> {
                         labels[kind]!,
                         _formatValue(row['value']),
                         unit: '${row['unit'] ?? ''}',
-                        sub: _sourceLine(row),
+                        sub: _sourceLine(row, l),
                       ),
                     ],
                   const SizedBox(height: S.x5),
@@ -408,11 +411,11 @@ String _formatValue(Object? v) {
 /// "Omron Connect · Thu 4 Sep, 07:12". The source is not optional decoration:
 /// a reading this app did not take, shown without saying who did, is a reading
 /// this app is implicitly claiming.
-String _sourceLine(Map<String, dynamic> row) {
+String _sourceLine(Map<String, dynamic> row, AppLocalizations? l) {
   final src = (row['source'] as String?)?.trim();
   final ts = (row['ts'] as num?)?.toInt();
   final when = ts == null
       ? null
-      : formatDayTime(DateTime.fromMillisecondsSinceEpoch(ts * 1000));
+      : formatDayTime(DateTime.fromMillisecondsSinceEpoch(ts * 1000), l);
   return [if (src != null && src.isNotEmpty) src, ?when].join(' · ');
 }

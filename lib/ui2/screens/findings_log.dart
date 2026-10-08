@@ -82,7 +82,7 @@ class FindingsLog extends StatelessWidget {
           for (final day in byDay.keys) ...[
             Padding(
               padding: const EdgeInsets.fromLTRB(S.x1, S.x5, S.x1, S.x2),
-              child: Text(prettyDay(day),
+              child: Text(prettyDay(day, l),
                   style: F.cap.copyWith(
                       color: p.ink3, fontWeight: FontWeight.w600)),
             ),
@@ -133,7 +133,7 @@ class FindingRow extends StatelessWidget {
     final p = P.of(c);
     final ink = _ink(p, f);
     return Semantics(
-      label: '${f.title}. ${f.detail}',
+      label: '${f.localizedTitle(AppLocalizations.of(c))}. ${f.localizedDetail(AppLocalizations.of(c))}',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -146,14 +146,14 @@ class FindingRow extends StatelessWidget {
               ),
               const SizedBox(width: S.x2),
               Expanded(
-                child: Text(f.title,
+                child: Text(f.localizedTitle(AppLocalizations.of(c)),
                     style: F.body.copyWith(
                         color: p.ink, fontWeight: FontWeight.w600)),
               ),
             ],
           ),
           const SizedBox(height: S.x2),
-          Text(f.detail, style: F.cap.copyWith(color: p.ink2, height: 1.5)),
+          Text(f.localizedDetail(AppLocalizations.of(c)), style: F.cap.copyWith(color: p.ink2, height: 1.5)),
         ],
       ),
     );

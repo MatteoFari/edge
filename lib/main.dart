@@ -3,6 +3,7 @@ import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:provider/provider.dart';
 
 import 'app.dart';
+import 'health/health_weight_import.dart';
 import 'telemetry/telemetry_service.dart';
 import 'ble/ios_ble_restore.dart';
 import 'notify/notification_service.dart';
@@ -137,6 +138,8 @@ Future<void> main() async {
   // Cache SharedPreferences so UI screens can synchronously RESTORE saved
   // selections (tab, range toggles) in initState with no async flash.
   await _safeInit('Prefs', Prefs.ensureLoaded);
+  // Available before runApp: headless weight workers may have no frame.
+  await _safeInit('AutoWeightImport', AutoWeightImport.start);
 
   // Resolve appearance (persisted choice + OS brightness) BEFORE the first frame
   // so login/signup already paint in the right mode (Ember on Paper / Char).

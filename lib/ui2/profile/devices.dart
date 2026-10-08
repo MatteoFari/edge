@@ -433,8 +433,7 @@ class _SignalPriorityScreenState extends State<SignalPriorityScreen> {
                               }
                               await _load();
                             },
-                            semanticLabel: 'Reset ${signalDisplayName(c, sig)} '
-                                'to the default order',
+                            semanticLabel: l?.devicesResetSignalSemantic(signalDisplayName(c, sig)) ?? 'Reset ${signalDisplayName(c, sig)} to the default order',
                             child: Padding(
                               padding: const EdgeInsets.symmetric(vertical: S.x2),
                               child: Text(
@@ -865,13 +864,13 @@ class HealthSource {
 ///
 /// Returns null for a non-band source: the phone reports steps and nothing that
 /// is calibrated per sensor.
-(String value, String sub)? calibrationDisclosure(HealthSource s) {
+(String value, String sub)? calibrationDisclosure(HealthSource s, [AppLocalizations? l]) {
   if (!s.isBand) return null;
   final label = bandLabelFor(s.family);
   if (label != null) {
     return (
       label,
-      'Metrics that depend on the sensor use this band’s own constants, so two '
+      l?.devicesCalibrationKnown ?? 'Metrics that depend on the sensor use this band’s own constants, so two '
           'different bands can land on different tiers for the same physiology.'
     );
   }
@@ -881,8 +880,8 @@ class HealthSource {
   // build has no registry entry for lands here too — an unknown band is not a
   // WHOOP 4.
   return (
-    'Not stated yet',
-    'This band has not said which generation it is, and imported or older '
+    l?.devicesCalibrationUnstated ?? 'Not stated yet',
+    l?.devicesCalibrationUnknown ?? 'This band has not said which generation it is, and imported or older '
         'days never will. Metrics that depend on the sensor abstain rather '
         'than borrow another band’s numbers.'
   );
@@ -1075,10 +1074,11 @@ class MyDevices extends StatelessWidget {
       // into first-run pairing (that was the bug where forgetting a band threw
       // months of data behind an onboarding screen), which makes this the only
       // way back to pairing. So push it.
-      onPair: () => goto(c, const RePair()),
-      onAddSensor: () => addSensor(c),
+      onNavigate: (open, page) async {
+        await open<void>(page);
+      },
+      onAddSensorNavigate: (open) => addSensor(c, open),
       contendedSignals: contendedSignals(app),
-      onSignalPriority: () => goto(c, const SignalPriorityScreen()),
     );
   }
 }
@@ -1366,7 +1366,7 @@ final List<({BandEntry entry, String blurb, Future<String?> Function(BluetoothDe
 ];
 
 /// Choose which kind of sensor to pair, then hand off to the pairing screen.
-Future<void> addSensor(BuildContext c) async {
+Future<void> addSensor(BuildContext c, [DetailOpener? open]) async {
   // Count paired secondary devices (the `device` table minus the primary row).
   //
   // PAIRED ROWS, NOT LIVE SLOTS, and deliberately: admission here is a
@@ -1395,7 +1395,11 @@ Future<void> addSensor(BuildContext c) async {
   if (!c.mounted) return;
   // `includeBand: false` — this phone already has its one primary band;
   // re-pairing it is `RePair`'s job, not a row beside a chest strap here.
-  await goto(c, const DevicePickerScreen(includeBand: false));
+  if (open == null) {
+    await goto(c, const DevicePickerScreen(includeBand: false));
+  } else {
+    await open<void>(const DevicePickerScreen(includeBand: false));
+  }
   // The picker's own sub-screens write a `device` row; nothing tells
   // AppState that happened.
   if (c.mounted) await c.read<AppState>().refreshSensors();
@@ -1518,6 +1522,8 @@ class MyDevicesView extends StatelessWidget {
   /// entry row absent by default (final-plan §4.5).
   final List<InputSignal> contendedSignals;
   final VoidCallback? onSignalPriority;
+  final Future<void> Function(DetailOpener, Widget)? onNavigate;
+  final Future<void> Function(DetailOpener)? onAddSensorNavigate;
 
   const MyDevicesView({
     super.key,
@@ -1527,6 +1533,8 @@ class MyDevicesView extends StatelessWidget {
     this.status,
     this.contendedSignals = const [],
     this.onSignalPriority,
+    this.onNavigate,
+    this.onAddSensorNavigate,
   });
 
   @override
@@ -1581,7 +1589,9 @@ class MyDevicesView extends StatelessWidget {
                                 'than estimate.'),
                     fix: l?.devicesPairABand ?? 'Pair a band',
                     icon: LucideIcons.watch,
-                    onFix: onPair,
+                    onFix: onNavigate == null ? onPair : null,
+                    onNavigate: onNavigate == null ? null
+                        : (open) => onNavigate!(open, const RePair()),
                   ),
                   if (sources.isNotEmpty) const SizedBox(height: S.x3),
                 ],
@@ -1593,7 +1603,7 @@ class MyDevicesView extends StatelessWidget {
                   const SizedBox(height: S.x3),
                 ],
                 for (final s in sources) ...[
-                  SourceRow(s, onTap: () => goto(c, DeviceDetail(s))),
+                  SourceRow(s, destination: DeviceDetail(s)),
                   if (s.isBand && fault != null) ...[
                     const SizedBox(height: S.x2),
                     StatusCard(fault.title, fault.reason,
@@ -1606,27 +1616,31 @@ class MyDevicesView extends StatelessWidget {
                 // gated on having a band: a sensor is a second source, and
                 // someone with no band at all is exactly who benefits most
                 // from being able to pair one.
-                if (onAddSensor != null)
+                if (onAddSensor != null || onAddSensorNavigate != null)
                   Surface(
                     pad: const EdgeInsets.symmetric(horizontal: S.x4),
+                    onNavigate: onAddSensorNavigate,
                     child: SetRow(LucideIcons.plus, C.green,
                         l?.devicesAddASensor ?? 'Add a sensor',
                         sub: l?.devicesAddASensorSub ??
                             'A heart-rate strap or a ring, alongside the band',
-                        onTap: onAddSensor),
+                        onTap: onAddSensorNavigate == null ? onAddSensor : null),
                   ),
                 // ONLY when something can actually contend. A reorder screen
                 // over one device is a control with nothing to order, which is
                 // the empty-rung problem this screen already refuses (§6.5).
-                if (contendedSignals.isNotEmpty && onSignalPriority != null) ...[
+                if (contendedSignals.isNotEmpty &&
+                    (onSignalPriority != null || onNavigate != null)) ...[
                   const SizedBox(height: S.x3),
                   Surface(
                     pad: const EdgeInsets.symmetric(horizontal: S.x4),
+                    onNavigate: onNavigate == null ? null
+                        : (open) => onNavigate!(open, const SignalPriorityScreen()),
                     child: SetRow(LucideIcons.arrowUpDown, C.blue,
                         l?.devicesWhichSourceWins ?? 'Which source wins',
                         sub: l?.devicesWhichSourceWinsSub ??
                             'When two of your devices measure the same thing',
-                        onTap: onSignalPriority),
+                        onTap: onNavigate == null ? onSignalPriority : null),
                   ),
                 ],
                 // NOT YET — removed from this screen per product decision
@@ -1707,7 +1721,8 @@ String _localizedSourceState(BuildContext c, HealthSource s) {
 class SourceRow extends StatelessWidget {
   final HealthSource s;
   final VoidCallback? onTap;
-  const SourceRow(this.s, {super.key, this.onTap});
+  final Widget? destination;
+  const SourceRow(this.s, {super.key, this.onTap, this.destination});
 
   @override
   Widget build(BuildContext c) {
@@ -1715,22 +1730,23 @@ class SourceRow extends StatelessWidget {
     final battery = s.batteryPct;
     return Surface(
       onTap: onTap,
+      destination: destination,
       child: Row(children: [
         Container(
           width: 52,
           height: 52,
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+          decoration: BoxDecoration(color: p.card2, borderRadius: R.controlOf(c)),
           child: Icon(s.icon, size: 24, color: p.ink2),
         ),
         const SizedBox(width: S.x3),
         Expanded(
           child:
               Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(s.name,
+            Text(s.name == 'Your band' ? (AppLocalizations.of(c)?.devicesYourBand ?? s.name) : s.name,
                 style: F.body
                     .copyWith(color: p.ink, fontWeight: FontWeight.w600)),
-            Text(s.kind, style: F.over.copyWith(color: p.ink3)),
+            Text(s.kind == 'Motion coprocessor' ? (AppLocalizations.of(c)?.devicesSourceMotion ?? s.kind) : s.kind == 'Unknown sensor' ? (AppLocalizations.of(c)?.devicesSourceUnknown ?? s.kind) : s.kind.replaceAll('wrist optical', AppLocalizations.of(c)?.devicesSourceOptical ?? 'wrist optical'), style: F.over.copyWith(color: p.ink3)),
             const SizedBox(height: 5),
             // Wrap, not Row: at 2x text "Not connected · 78%" is wider than
             // the card and a Flex would simply clip the battery away.
@@ -2012,12 +2028,12 @@ Future<void> _syncRing(BuildContext c, String? family) async {
 Future<void> _syncCorosWatch(BuildContext c) async {
   final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await CorosLink.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         // Its OWN string, not the ring's — `devicesCouldNotReachRing` names
         // the device in its text, and a watch synced through here is not one.
         : (l?.devicesCouldNotReachCorosWatch ??
@@ -2033,12 +2049,12 @@ Future<void> _syncCorosWatch(BuildContext c) async {
 Future<void> _syncGarminWatch(BuildContext c) async {
   final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await GarminLink.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         : (l?.devicesCouldNotReachRing ??
             'Could not reach it. It has to be nearby, and not connected to '
                 'another app.')),
@@ -2058,7 +2074,7 @@ Future<void> _syncUltrahumanRing(BuildContext c) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         : (l?.devicesCouldNotReachRing ??
             'Could not reach the ring. It has to be nearby, and not connected '
                 'to another app.')),
@@ -2078,9 +2094,8 @@ Future<void> _syncMiband(BuildContext c) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
-        : 'Could not reach the band. It has to be nearby, and not '
-            'connected to another app.'),
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
+        : (l?.devicesCouldNotReachBand ?? 'Could not reach the band. It has to be nearby, and not connected to another app.')),
   ));
 }
 
@@ -2090,104 +2105,103 @@ Future<void> _syncMiband(BuildContext c) async {
 Future<void> _syncPebble(BuildContext c) async {
   final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing the watch…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncingTheWatch ?? 'Syncing the watch…')));
   final ok = await PebbleLink.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
-        : 'Could not reach the watch. It has to be nearby, and not '
-            'connected to another app.'),
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
+        : (l?.devicesCouldNotReachWatch ?? 'Could not reach the watch. It has to be nearby, and not connected to another app.')),
   ));
 }
 
 /// Pull whatever a paired Makibes HR3 has sent since the last connect, now,
 /// because the user asked. Same shape as [_syncRing] one function up.
 Future<void> _syncMakibesHr3(BuildContext c) async {
+  final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await MakibesHr3Link.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? 'Synced.'
-        : 'Could not reach the board. It has to be nearby, and not '
-            'connected to another app.'),
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachBoard ?? 'Could not reach the board. It has to be nearby, and not connected to another app.')),
   ));
 }
 
 /// Pull whatever a paired ID115 has sent since the last connect, now,
 /// because the user asked. Same shape as [_syncRing] one function up.
 Future<void> _syncId115(BuildContext c) async {
+  final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await Id115Link.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? 'Synced.'
-        : 'Could not reach the board. It has to be nearby, and not '
-            'connected to another app.'),
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachBoard ?? 'Could not reach the board. It has to be nearby, and not connected to another app.')),
   ));
 }
 
 /// Pull whatever a paired SMA-Q2-OSS has sent since the last connect, now,
 /// because the user asked. Same shape as [_syncRing] one function up.
 Future<void> _syncSmaq2oss(BuildContext c) async {
+  final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await Smaq2ossLink.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? 'Synced.'
-        : 'Could not reach the watch. It has to be nearby, and not '
-            'connected to another app.'),
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachWatch ?? 'Could not reach the watch. It has to be nearby, and not connected to another app.')),
   ));
 }
 
 /// Pull whatever a paired XWatch has sent since the last connect, now,
 /// because the user asked. Same shape as [_syncRing] one function up.
 Future<void> _syncXWatch(BuildContext c) async {
+  final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await XWatchLink.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? 'Synced.'
-        : 'Could not reach the board. It has to be nearby, and not '
-            'connected to another app.'),
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachBoard ?? 'Could not reach the board. It has to be nearby, and not connected to another app.')),
   ));
 }
 
 /// Pull whatever a paired Watch9 has sent since the last connect, now,
 /// because the user asked. Same shape as [_syncRing] one function up.
 Future<void> _syncWatch9(BuildContext c) async {
+  final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await Watch9Link.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? 'Synced.'
-        : 'Could not reach the board. It has to be nearby, and not '
-            'connected to another app.'),
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachBoard ?? 'Could not reach the board. It has to be nearby, and not connected to another app.')),
   ));
 }
 
 /// Pull whatever a paired NO1-family band has sent since the last connect,
 /// now, because the user asked. Same shape as [_syncRing] one function up.
 Future<void> _syncNo1Band(BuildContext c) async {
+  final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await Tlw64Link.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? 'Synced.'
-        : 'Could not reach the band. It has to be nearby, and not connected '
-            'to another app.'),
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachBand ?? 'Could not reach the band. It has to be nearby, and not connected to another app.')),
   ));
 }
 
@@ -2197,18 +2211,13 @@ Future<void> _syncNo1Band(BuildContext c) async {
 Future<void> _syncDafitWatch(BuildContext c) async {
   final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  // No localized string yet — same call as device_picker.dart's 'dafit'
-  // blurb, and for the same reason. Deliberately NOT `devicesCouldNotReachRing`
-  // below either: that key is ring-specific text in every translated locale,
-  // and this device is a watch, not a ring.
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await DafitLink.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
-        : 'Could not reach it. It has to be nearby, and not connected to '
-            'another app.'),
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
+        : (l?.devicesCouldNotReachDevice ?? 'Could not reach it. It has to be nearby, and not connected to another app.')),
   ));
 }
 
@@ -2245,7 +2254,7 @@ Future<void> _syncBangleJs(BuildContext c) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         : (l?.devicesCouldNotReachWatch ??
             'Could not reach the watch. It has to be nearby, and not '
                 'connected to another app.')),
@@ -2265,7 +2274,7 @@ Future<void> _syncSensor(BuildContext c, Future<bool> Function() sync) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         : (l?.devicesCouldNotReachSensor ??
             'Could not reach the sensor. It has to be nearby, and not '
                 'connected to another app.')),
@@ -2282,7 +2291,7 @@ Future<void> _syncDt78(BuildContext c) async {
   // syncing" and "could not reach the watch" alike — a real distinction the
   // snack bar should not blur into one failure sentence.
   if (Dt78Link.instance.busy) {
-    messenger?.showSnackBar(const SnackBar(content: Text('Already syncing.')));
+    messenger?.showSnackBar(SnackBar(content: Text(l?.deviceAlreadySyncing ?? 'Already syncing.')));
     return;
   }
   // `devicesSyncing`/`devicesSynced` are genuinely generic ("Syncing"/
@@ -2296,9 +2305,8 @@ Future<void> _syncDt78(BuildContext c) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
-        : 'Could not reach the watch. It has to be nearby, and not connected '
-            'to another app.'),
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
+        : (l?.devicesCouldNotReachWatch ?? 'Could not reach the watch. It has to be nearby, and not connected to another app.')),
   ));
 }
 
@@ -2314,24 +2322,23 @@ Future<void> _syncHPlus(BuildContext c) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
-        : 'Could not reach the band. It has to be nearby, and not connected '
-            'to another app.'),
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
+        : (l?.devicesCouldNotReachBand ?? 'Could not reach the band. It has to be nearby, and not connected to another app.')),
   ));
 }
 
 /// Pull whatever a Jyou band has streamed since the last connect, now,
 /// because the user asked. Same shape as [_syncRing] one function up.
 Future<void> _syncJyou(BuildContext c) async {
+  final l = AppLocalizations.of(c);
   final messenger = ScaffoldMessenger.maybeOf(c);
-  messenger?.showSnackBar(const SnackBar(content: Text('Syncing…')));
+  messenger?.showSnackBar(SnackBar(content: Text(l?.devicesSyncing ?? 'Syncing…')));
   final ok = await JyouLink.instance.sync();
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? 'Synced.'
-        : 'Could not reach the band. It has to be nearby, and not connected '
-            'to another app.'),
+        ? (l?.devicesSynced ?? 'Synced.')
+        : (l?.devicesCouldNotReachBand ?? 'Could not reach the band. It has to be nearby, and not connected to another app.')),
   ));
 }
 
@@ -2354,9 +2361,8 @@ Future<void> _syncPineTime(BuildContext c) async {
   messenger?.hideCurrentSnackBar();
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
-        : 'Could not reach the watch. It has to be nearby, and not connected '
-            'to another app.'),
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
+        : (l?.devicesCouldNotReachWatch ?? 'Could not reach the watch. It has to be nearby, and not connected to another app.')),
   ));
 }
 
@@ -2373,7 +2379,7 @@ Future<void> _syncQHybrid(BuildContext c) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         : (l?.devicesCouldNotReachWatch ??
             'Could not reach the watch. It has to be nearby, and not '
                 'connected to another app.')),
@@ -2393,7 +2399,7 @@ Future<void> _syncColmiRing(BuildContext c) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         : (l?.devicesCouldNotReachRing ??
             'Could not reach the ring. It has to be nearby, and not connected '
                 'to another app.')),
@@ -2413,7 +2419,7 @@ Future<void> _syncCasio(BuildContext c, String? deviceId) async {
   if (!c.mounted) return;
   messenger?.showSnackBar(SnackBar(
     content: Text(ok
-        ? (l?.devicesSynced ?? 'Synced.')
+        ? (l?.devicesSynced ?? (l?.devicesSynced ?? 'Synced.'))
         : (l?.devicesCouldNotReachWatch ??
             'Could not reach the watch. It has to be nearby, and not '
                 'connected to another app.')),
@@ -2620,7 +2626,7 @@ class DeviceDetailView extends StatelessWidget {
     final last = s.lastData;
     final fault =
         localizedStatus?.isFault == true ? localizedStatus : null;
-    final calibration = calibrationDisclosure(s);
+    final calibration = calibrationDisclosure(s, l);
     return Scaffold(
       backgroundColor: p.bg,
       body: SafeArea(
@@ -2639,12 +2645,14 @@ class DeviceDetailView extends StatelessWidget {
                     height: 120,
                     alignment: Alignment.center,
                     decoration:
-                        BoxDecoration(color: p.card2, borderRadius: R.rXxl),
+                        BoxDecoration(
+                            color: p.card2,
+                            borderRadius: p.expressive ? R.rPill : R.rXxl),
                     child: Icon(s.icon, size: 54, color: p.ink2),
                   ),
                 ),
                 const SizedBox(height: S.x5),
-                Center(child: Text(s.name, style: F.t2.copyWith(color: p.ink))),
+                Center(child: Text(s.name == 'Your band' ? (AppLocalizations.of(c)?.devicesYourBand ?? s.name) : s.name, style: F.t2.copyWith(color: p.ink))),
                 const SizedBox(height: S.x2),
                 // A fault names itself in the card below; repeating its title
                 // here would say the same thing twice in two type sizes.
@@ -2786,8 +2794,8 @@ class DeviceDetailView extends StatelessWidget {
                                   'Not reported since the last connection')
                               : [
                                   if (s.charging) (l?.devicesCharging ?? 'Charging'),
-                                  ?_timeLeft(forecast),
-                                  ?_chargeHistory(health),
+                                  ?_timeLeft(forecast, l),
+                                  ?_chargeHistory(health, l),
                                 ].join(' · '),
                           chevron: false),
                       Divider(color: p.line, height: 1),
@@ -2868,24 +2876,25 @@ class DeviceDetailView extends StatelessWidget {
 /// that only moves in whole points, so it does not support a time of day, and
 /// printing one would claim a precision this cannot carry. "About" is doing
 /// real work in that sentence.
-String? _timeLeft(BatteryForecast? f) {
+String? _timeLeft(BatteryForecast? f, AppLocalizations? l) {
   final empty = f?.predictedEmptyAt;
   if (empty == null) return null;
   final left = empty.difference(DateTime.now());
   if (left.isNegative) return null;
-  if (left.inHours < 1) return 'under an hour left';
-  if (left.inHours < 36) return 'about ${left.inHours} h left';
-  return 'about ${(left.inHours / 24).round()} days left';
+  if (left.inHours < 1) return l?.devicesBatteryUnderHour ?? 'under an hour left';
+  if (left.inHours < 36) return l?.devicesBatteryHoursLeft(left.inHours) ?? 'about ${left.inHours} h left';
+  return l?.devicesBatteryDaysLeft((left.inHours / 24).round()) ?? 'about ${(left.inHours / 24).round()} days left';
 }
 
 /// "12 charges logged, up to 4,180 mV" — or null when there is no history to
 /// report yet. Two facts about this band and nothing derived from them: nothing
 /// here knows the pack's design capacity, and going on the charger is not a
 /// cycle.
-String? _chargeHistory(Map<String, dynamic>? h) {
+String? _chargeHistory(Map<String, dynamic>? h, AppLocalizations? l) {
   final cycles = (h?['charge_cycles'] as num?)?.toInt() ?? 0;
   if (cycles <= 0) return null;
   final mv = (h?['full_charge_mv'] as num?)?.toInt();
+  if (l != null) return '${l.devicesChargesLogged(cycles)}${mv == null ? '' : l.devicesChargePeak(displayNumber(mv, l))}';
   return '$cycles charge${cycles == 1 ? '' : 's'} logged'
       '${mv == null ? '' : ', up to $mv mV'}';
 }

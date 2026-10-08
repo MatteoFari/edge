@@ -7,11 +7,20 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.content.res.Configuration
 import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import java.util.Locale
+
+/** Mirrors the Flutter app's supported-language/system fallback selection. */
+internal fun trackingLanguage(savedLanguage: String?, systemLanguages: List<String>): String {
+    val supported = setOf("en", "de", "es", "fr", "hi", "zh", "it")
+    if (savedLanguage != null && savedLanguage in supported) return savedLanguage
+    return systemLanguages.firstOrNull { it in supported } ?: "en"
+}
 
 /**
  * Foreground service that keeps the app process alive while backgrounded so the live
@@ -178,14 +187,27 @@ class EdgeTrackingService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun createChannel() {
+    private fun notificationContext(): Context {
+        // SharedPreferences.getInstance uses this existing Android file/prefix.
+        // Only read the Flutter override; native code never changes it.
+        val savedLanguage = getSharedPreferences("FlutterSharedPreferences", Context.MODE_PRIVATE)
+            .getString("flutter.locale_override", null)
+        val configuration = Configuration(resources.configuration)
+        val languages = (0 until configuration.locales.size()).map {
+            configuration.locales[it].language
+        }
+        configuration.setLocale(Locale.forLanguageTag(trackingLanguage(savedLanguage, languages)))
+        return createConfigurationContext(configuration)
+    }
+
+    private fun createChannel(localized: Context = notificationContext()) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(
                 CHANNEL_ID,
-                "Edge Tracking",
+                localized.getString(R.string.tracking_title),
                 NotificationManager.IMPORTANCE_LOW,
             )
-            ch.description = "Keeps your strap syncing in the background"
+            ch.description = localized.getString(R.string.tracking_channel_description)
             ch.setShowBadge(false)
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
                 .createNotificationChannel(ch)
@@ -193,9 +215,13 @@ class EdgeTrackingService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val localized = notificationContext()
+        // Existing channels retain their ID/importance. Re-registering updates
+        // their displayed name/description after a language preference change.
+        createChannel(localized)
         return NotificationCompat.Builder(this, CHANNEL_ID)
-            .setContentTitle("Edge Tracking")
-            .setContentText("Keeping your strap in sync")
+            .setContentTitle(localized.getString(R.string.tracking_title))
+            .setContentText(localized.getString(R.string.tracking_body))
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
             .setOngoing(true)
             .setSilent(true)

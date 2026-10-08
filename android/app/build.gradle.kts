@@ -130,9 +130,9 @@ flutter {
 dependencies {
     // Backs isCoreLibraryDesugaringEnabled (required by ota_update 7.x).
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    // Native sleep-session writer. Match health 11.1.1's AndroidX version so
-    // the app and plugin compile against one Health Connect API surface.
-    implementation("androidx.health.connect:connect-client:1.1.0-alpha07")
+    // Match health 12.2.1: supports optional background/history grants while
+    // preserving the Metadata constructor used by existing exporters.
+    implementation("androidx.health.connect:connect-client:1.1.0-alpha11")
     // KeepAliveWorker (service watchdog). The workmanager Flutter plugin ships the
     // runtime transitively, but as an `implementation` dep it isn't visible to app
     // code at compile time — declare it explicitly for our native Worker.

@@ -27,22 +27,19 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 import 'package:provider/provider.dart';
 
-import '../../ble/adapters/signals.dart' show InputSignal;
-import '../../data/day_label.dart' show localDayEndSec;
+import '../../data/day_label.dart' show localDayStartSec, localDayEndSec;
 import '../../data/db.dart';
 import '../../data/journal_fields.dart';
 import '../../data/local_repository.dart';
 import '../../data/med_store.dart';
 import '../../data/nutrition_store.dart';
 import '../../l10n/app_localizations.dart';
-import '../../state/app_state.dart';
 import '../../state/locale_controller.dart';
 import '../activity/catalogue.dart' show activityByName;
-import '../profile/devices.dart'
-    show DeviceFilter, DeviceOption, signalCandidates;
 import '../ui2.dart';
-import 'home_screen.dart' show clockOfTs, repoOf;
-import 'metric_detail.dart' show dayNavRow, detailScaffold, pickDay;
+import 'home_screen.dart' show clockOfTs, prettyDay, repoOf;
+import 'metric_detail.dart'
+    show MetricDetail, dayNavRow, detailLinkRow, detailScaffold, pickDay;
 
 /// One thing that happened, at a time it is known to have happened at.
 @immutable
@@ -288,10 +285,10 @@ List<Moment> dayMoments({
         DateTime(d.year, d.month, d.day, 0, min).millisecondsSinceEpoch ~/ 1000;
     out.add(Moment(
       at: at,
-      title: spec?.label ?? key.replaceAll('_', ' '),
+      title: spec?.localizedLabel(l) ?? key.replaceAll('_', ' '),
       // "last one at" is the stored meaning, and saying just "at" would turn a
       // total plus one timestamp into a single event that never happened.
-      detail: '$n${spec == null || spec.unit.isEmpty ? '' : ' ${spec.unit}'} · '
+      detail: '$n${spec == null || spec.unit.isEmpty ? '' : ' ${spec.localizedUnit(l)}'} · '
           '${l?.dayTimelineLastAt(clockOfTs(at)) ?? 'last at ${clockOfTs(at)}'}',
       icon: LucideIcons.notebookPen,
       color: C.domMind,
@@ -336,8 +333,8 @@ List<DayNote> dayNotes({
         ? v.value.round().toString()
         : v.value.toStringAsFixed(1);
     out.add(DayNote(
-      spec?.label ?? key.replaceAll('_', ' '),
-      '$n${spec == null || spec.unit.isEmpty ? '' : ' ${spec.unit}'}',
+      spec?.localizedLabel(l) ?? key.replaceAll('_', ' '),
+      '$n${spec == null || spec.unit.isEmpty ? '' : ' ${spec.localizedUnit(l)}'}',
       LucideIcons.clipboardList,
     ));
   });
@@ -383,15 +380,24 @@ const int kDayMinutes = 1440;
 @immutable
 class DayGraph {
   const DayGraph({
+    this.startSec,
     this.hr = const [],
+    this.hrTimes = const [],
     this.movement = const [],
     this.rest = const [],
     this.work = const [],
   });
 
+  /// Actual local midnight, including the timezone offset for this day.
+  final int? startSec;
+
   /// Beats per minute, one slot per minute of the day, `null` where nothing
   /// was recorded.
   final List<double?> hr;
+
+  /// The recorded timestamp of each minute average. Retained for inspection
+  /// rather than inventing a timestamp when a source supplies one.
+  final List<int?> hrTimes;
 
   /// Share of each minute spent moving, 0…1, `null` where nothing was
   /// recorded. Note the difference from a zero: 0 is a minute we watched you
@@ -406,7 +412,37 @@ class DayGraph {
 
   int get slots => hr.length > movement.length ? hr.length : movement.length;
 
-  bool get hasCurve => hr.any((v) => v != null);
+  bool get hasCurve => hr.any((v) => v != null && v.isFinite && v > 0);
+
+  /// A touch selects the closest minute on the axis, including empty ones.
+  /// Never search across a gap for a plausible neighbouring heart rate.
+  int slotAt(double fraction) =>
+      slots <= 1 ? 0 : (fraction.clamp(0.0, 1.0) * (slots - 1)).round();
+
+  int? timeAt(int slot) => slot < 0 || slot >= slots
+      ? null
+      : (slot < hrTimes.length ? hrTimes[slot] : null) ??
+            (startSec == null ? null : startSec! + slot * 60);
+
+  double? readingAt(int slot) {
+    if (slot < 0 || slot >= hr.length) return null;
+    final v = hr[slot];
+    return v != null && v.isFinite && v > 0 ? v : null;
+  }
+
+  /// Discrete access to measured points for keyboard/screen-reader users.
+  int? nextReading(int? from, int direction) {
+    if (direction == 0) return null;
+    direction = direction.sign;
+    for (
+      var i = (from ?? (direction > 0 ? -1 : hr.length)) + direction;
+      i >= 0 && i < hr.length;
+      i += direction
+    ) {
+      if (readingAt(i) != null) return i;
+    }
+    return null;
+  }
 
   bool get isEmpty =>
       !hasCurve &&
@@ -432,7 +468,8 @@ class DayGraph {
     final out = <(int, int)>[];
     int? from;
     for (var i = 0; i < n; i++) {
-      final has = known[i] ||
+      final has =
+          known[i] ||
           (i < hr.length && hr[i] != null) ||
           (i < movement.length && movement[i] != null);
       if (has) {
@@ -465,19 +502,21 @@ DayGraph dayGraph(Map<String, dynamic> timeline, {List<Object?>? hrOverride}) {
 
   int? slot(Object? ts) {
     final t = (ts as num?)?.toInt();
-    if (t == null) return null;
+    if (t == null || t < dayStart) return null;
     final m = (t - dayStart) ~/ 60;
     return m < 0 || m >= n ? null : m;
   }
 
   final hr = List<double?>.filled(n, null);
+  final hrTimes = List<int?>.filled(n, null);
   for (final e in hrOverride ?? (timeline['hr'] as List?) ?? const []) {
     if (e is! Map) continue;
     final i = slot(e['t']);
     final v = (e['v'] as num?)?.toDouble();
     // hr 0 is the pipeline's "no lock", not a heart that stopped.
-    if (i == null || v == null || v <= 0) continue;
+    if (i == null || v == null || !v.isFinite || v <= 0) continue;
     hr[i] = v;
+    hrTimes[i] = (e['t'] as num).toInt();
   }
 
   // The activity curve is 5-minute buckets. Each one fills its own five
@@ -523,10 +562,22 @@ DayGraph dayGraph(Map<String, dynamic> timeline, {List<Object?>? hrOverride}) {
       if (s is Map) ?span(s['start_ts'], s['end_ts'], C.orange),
   ];
 
-  return DayGraph(hr: hr, movement: movement, rest: rest, work: work);
+  return DayGraph(
+    startSec: dayStart,
+    hr: hr,
+    hrTimes: hrTimes,
+    movement: movement,
+    rest: rest,
+    work: work,
+  );
 }
 
 // ═══════════════════ the screen ═══════════════════
+
+/// An explicit calendar day must keep its label even before it has a derived
+/// bundle. Only a default request may choose the newest available day.
+String? dayForTimeline(List<String> days, {String? want, String? prefer}) =>
+    want ?? pickDay(days, null, prefer);
 
 class TimelineData {
   const TimelineData({
@@ -560,12 +611,20 @@ class TimelineData {
   }) async {
     final days = await repo.availableDays();
     final today = await repo.getToday();
-    final day = pickDay(
-        days, want, (today['status'] as Map?)?['today_day']?.toString());
+    final day = dayForTimeline(days, want: want,
+        prefer: (today['status'] as Map?)?['today_day']?.toString());
     if (day == null) return TimelineData(days: days);
 
-    final timeline = await repo.getDayTimeline(day);
-    final wear = await repo.getDayWear(day);
+    final loadedTimeline = await repo.getDayTimeline(day);
+    // A read may serve the latest settled bundle while today's is partial.
+    // This page has an explicit day picker: yesterday's curve and events must
+    // never acquire the selected day's label.
+    final differentDay = loadedTimeline['date'] != null &&
+        loadedTimeline['date'] != day;
+    final timeline = differentDay ? <String, dynamic>{} : loadedTimeline;
+    final wear = differentDay
+        ? const <String, dynamic>{}
+        : await repo.getDayWear(day);
     final fields = await repo.getJournalFields();
     final journal = await repo.getJournalMetrics(day);
     final db = await LocalDb.instance;
@@ -650,18 +709,6 @@ class _DayTimelineScreenState extends State<DayTimelineScreen> {
   bool _loading = true;
   String? _day;
 
-  /// The devices that could serve `hr` on this screen — registry-only, no
-  /// query. Empty on every single-device install, which keeps the filter row
-  /// absent (M6 §7.3).
-  List<DeviceOption> _candidates = const [];
-
-  /// The device whose own curve [_d]'s graph is drawn from, or null for the
-  /// merged one. Cleared on every day change — a device selection is about
-  /// the day on screen.
-  String? _device;
-  bool _deviceBounded = false;
-  String? _deviceOldest;
-
   // `TimelineData` bakes `AppLocalizations` strings into `moments`/`notes` at
   // load time (see `TimelineData.load`), so a language switch while this
   // screen is alive would otherwise leave it showing the old locale until
@@ -675,12 +722,6 @@ class _DayTimelineScreenState extends State<DayTimelineScreen> {
   /// NEWER one (a locale change firing while a day-nav load is still in
   /// flight) can tell it lost the race and must not overwrite fresher data.
   int _loadToken = 0;
-
-  /// The same guard for the per-device chart read, which awaits on its own.
-  /// Bumped by `_load()` too, so a day change also invalidates a device
-  /// request still in flight — otherwise the older response landed last and
-  /// rebuilt `_d` from the PREVIOUS day's raw.
-  int _deviceToken = 0;
 
   @override
   void initState() {
@@ -716,7 +757,6 @@ class _DayTimelineScreenState extends State<DayTimelineScreen> {
 
   Future<void> _load() async {
     final token = ++_loadToken;
-    _deviceToken++;
     final repo = repoOf(context);
     if (repo == null) {
       if (mounted && token == _loadToken) setState(() => _loading = false);
@@ -725,80 +765,15 @@ class _DayTimelineScreenState extends State<DayTimelineScreen> {
     final l = AppLocalizations.of(context);
     try {
       final d = await TimelineData.load(repo, want: _day, l: l);
-      final candidates = mounted
-          ? signalCandidates(context, context.read<AppState>(),
-              requires: {InputSignal.hr1Hz})
-          : const <DeviceOption>[];
       if (mounted && token == _loadToken) {
         setState(() => (
           _d = d,
-          _candidates = candidates,
-          _device = null,
-          // Cleared WITH `_device`. Left behind, the bounded-history message
-          // and its oldest-day marker outlived the selection that produced
-          // them and rendered against no selected device at all.
-          _deviceBounded = false,
-          _deviceOldest = null,
           _loading = false,
         ));
       }
     } catch (_) {
       if (mounted && token == _loadToken) setState(() => _loading = false);
     }
-  }
-
-  Future<void> _selectDevice(String? id) async {
-    final token = ++_deviceToken;
-    final d = _d;
-    final day = _day ?? d?.day;
-    if (d?.raw == null || day == null) return;
-    if (id == null) {
-      setState(() {
-        _device = null;
-        _deviceBounded = false;
-        _deviceOldest = null;
-        _d = TimelineData(
-          day: d!.day,
-          days: d.days,
-          graph: dayGraph(d.raw!),
-          moments: d.moments,
-          notes: d.notes,
-          raw: d.raw,
-        );
-      });
-      return;
-    }
-    final repo = repoOf(context);
-    if (repo == null) return;
-    final Map<String, Object?> c;
-    try {
-      c = await repo.getDeviceChart('hr', deviceId: id, date: day);
-    } catch (_) {
-      // A failed read leaves the graph and the selection exactly as they were:
-      // the alternative is an empty chart under a device pill, which claims
-      // that device recorded nothing.
-      return;
-    }
-    // A newer selection (another device, or a day change through `_load`)
-    // started while this read was in flight, so this answer is about a
-    // timeline that is no longer on screen.
-    if (!mounted || token != _deviceToken) return;
-    final bounded = c['bounded'] == true;
-    setState(() {
-      _device = id;
-      _deviceBounded = bounded;
-      _deviceOldest = c['oldest'] as String?;
-      _d = TimelineData(
-        day: d!.day,
-        days: d.days,
-        graph: bounded
-            ? const DayGraph()
-            : dayGraph(d.raw!, hrOverride: c['points'] as List?),
-        moments: d.moments,
-        notes: d.notes,
-        raw: d.raw,
-      );
-    });
   }
 
   void _goDay(String day) {
@@ -820,26 +795,6 @@ class _DayTimelineScreenState extends State<DayTimelineScreen> {
         const SizedBox(height: S.x8),
         const Center(child: CircularProgressIndicator()),
       ] else ...[
-        if (_candidates.length >= 2) ...[
-          const SizedBox(height: S.x2),
-          DeviceFilter(
-            options: _candidates,
-            selected: _device,
-            onSelect: _selectDevice,
-          ),
-          if (_deviceBounded)
-            Padding(
-              padding: const EdgeInsets.only(top: S.x2),
-              child: Text(
-                l?.dayTimelineDeviceBounded(_deviceOldest ?? '') ??
-                    'Per-device detail is kept for recent days only. Before '
-                        '${_deviceOldest ?? ''} we know which device recorded, '
-                        'not what it said.',
-                style: F.over.copyWith(color: P.of(c).ink3),
-              ),
-            ),
-          const SizedBox(height: S.x2),
-        ],
         ...timelineBody(c, d),
       ],
     ]);
@@ -852,68 +807,437 @@ class _DayTimelineScreenState extends State<DayTimelineScreen> {
 /// for, and a frame with an axis and no line under it reads as a measurement
 /// of zero. A day like that is entirely carried by the list underneath, which
 /// is the right shape for it — a handful of things that happened, in order.
-Widget? dayGraphCard(BuildContext c, DayGraph g) {
+Widget? dayGraphCard(BuildContext c, DayGraph g, {String? day}) {
   if (!g.hasCurve) return null;
-  final p = P.of(c);
-  final l = AppLocalizations.of(c);
-  final n = g.slots;
-  double at(int m) => n <= 0 ? 0 : m / n;
-  final axis = AxisSpec.of([for (final v in g.hr) ?v], ticks: 3);
-  if (axis == null) return null;
+  return _InteractiveDayGraph(graph: g, day: day);
+}
 
-  final asleep = p.on(C.blue), workout = p.on(C.orange);
-  final gaps = g.unmeasured;
-  return Surface(
-    child: ChartFrame(
-      title: l?.dayTimelineHeartRateTitle ?? 'Heart rate',
-      unit: 'bpm',
-      height: 200,
-      yAxis: axis,
-      // Three, and only three, because ChartFrame lays the first flush left,
-      // the last flush right and the rest centred — which puts a middle label
-      // exactly on the middle of the plot and a five-label row 5 % out.
-      xLabels: [
-        l?.dayTimelineMidnight ?? 'Midnight',
-        l?.dayTimelineNoon ?? 'Noon',
-        l?.dayTimelineMidnight ?? 'Midnight',
-      ],
-      legend: [
-        if (g.rest.isNotEmpty) (l?.dayTimelineAsleep ?? 'Asleep', asleep),
-        if (g.work.isNotEmpty) (l?.dayTimelineWorkout ?? 'Workout', workout),
-        if (g.movement.any((v) => v != null))
-          (l?.dayTimelineMoving ?? 'Moving', p.on(C.domMove)),
-        if (gaps.isNotEmpty) (l?.dayTimelineNotRecorded ?? 'Not recorded', p.card2),
-      ],
-      series: g.hr,
-      child: Stack(children: [
-        Positioned.fill(
-          child: CustomPaint(
-            size: Size.infinite,
-            painter: DayLanes(
-              p: p,
-              gaps: [for (final (a, b) in gaps) (at(a), at(b))],
-              rest: [
-                for (final (a, b, _) in g.rest) (at(a), at(b), asleep),
-              ],
-              work: [
-                for (final (a, b, _) in g.work) (at(a), at(b), workout),
-              ],
-              movement: g.movement,
-            ),
-          ),
-        ),
-        Positioned.fill(
-          child: CustomPaint(
-            size: Size.infinite,
-            // No fill under the line: the area would swallow the bands behind
-            // it, and the bands are the half of this picture the curve cannot
-            // say on its own.
-            painter: LineChart(g.hr, p.on(C.red), fill: false, axis: axis),
-          ),
-        ),
-      ]),
-    ),
+/// One chart at two sizes. The expanded view uses the same immutable day and
+/// source selection; opening it never fetches a different day's curve.
+class _ExpandedDayGraph extends StatelessWidget {
+  final DayGraph graph;
+  final String? day;
+  final int? selected;
+  const _ExpandedDayGraph({required this.graph, this.day, this.selected});
+
+  @override
+  Widget build(BuildContext c) => detailScaffold(
+    c,
+    AppLocalizations.of(c)?.dayTimelineHeartRateTitle ?? 'Heart rate',
+    [
+      _InteractiveDayGraph(
+        graph: graph,
+        day: day,
+        expanded: true,
+        selected: selected,
+      ),
+    ],
+    sub: prettyDay(day, AppLocalizations.of(c)),
   );
+}
+
+class _InteractiveDayGraph extends StatefulWidget {
+  final DayGraph graph;
+  final String? day;
+  final bool expanded;
+  final int? selected;
+  const _InteractiveDayGraph({
+    required this.graph,
+    this.day,
+    this.expanded = false,
+    this.selected,
+  });
+
+  @override
+  State<_InteractiveDayGraph> createState() => _InteractiveDayGraphState();
+}
+
+class _InteractiveDayGraphState extends State<_InteractiveDayGraph> {
+  final _scroll = ScrollController();
+  AxisSpec? _axis;
+  List<(int, int)> _gaps = const [];
+  int? _selected;
+  double _zoom = 1;
+  double _viewport = 0;
+
+  DayGraph get g => widget.graph;
+  int get _last => g.slots - 1;
+  double get _fraction =>
+      _selected == null || _last <= 0 ? 0 : _selected! / _last;
+
+  @override
+  void initState() {
+    super.initState();
+    _prepare();
+    _selected = widget.selected;
+    if (widget.expanded) {
+      _zoom = 4;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _reveal(_selected ?? g.nextReading(null, 1) ?? 0);
+        // Refresh the visible-range summary after the first layout, even
+        // when revealing midnight leaves the scroll offset unchanged.
+        setState(() {});
+      });
+    }
+    _scroll.addListener(_onScroll);
+  }
+
+  // At most 1,500 persisted minute slots. Prepared once per dataset, with no
+  // raw-record reads, derivation or resampling in a gesture callback.
+  void _prepare() {
+    _axis = AxisSpec.of([for (final v in g.hr) ?v]);
+    _gaps = g.unmeasured;
+  }
+
+  @override
+  void didUpdateWidget(covariant _InteractiveDayGraph old) {
+    super.didUpdateWidget(old);
+    if (old.graph != g || old.day != widget.day) {
+      _prepare();
+      _selected = null;
+      _zoom = widget.expanded ? 4 : 1;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scroll.hasClients) _scroll.jumpTo(0);
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    _scroll.dispose();
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (mounted) setState(() {});
+  }
+
+  int? _time(int slot) {
+    final start = localDayStartSec(widget.day ?? '');
+    return g.timeAt(slot) ?? (start == null ? null : start + slot * 60);
+  }
+
+  String _clock(int slot, {bool showZone = false}) {
+    final ts = _time(slot);
+    if (ts == null) return '—';
+    final clock = clockOfTs(ts);
+    return showZone
+        ? '$clock (${DateTime.fromMillisecondsSinceEpoch(ts * 1000).timeZoneName})'
+        : clock;
+  }
+
+  String _description(BuildContext c, int slot) {
+    final l = AppLocalizations.of(c);
+    final v = g.readingAt(slot);
+    // Fall-back days contain the same local hour twice. Keep the zone with
+    // the inspected timestamp so those two recorded moments are distinct.
+    final time = _clock(slot, showZone: g.slots != kDayMinutes);
+    return v == null
+        ? '$time · ${l?.dayGraphNoReading ?? 'No heart-rate reading in this minute'}'
+        : '${l?.dayTimelineBpmAt(v.round(), time) ?? '${v.round()} bpm at $time'} · '
+              '${l?.dayGraphMinuteAverage ?? 'Average for this minute'}';
+  }
+
+  void _select(double fraction) =>
+      setState(() => _selected = g.slotAt(fraction));
+
+  void _reveal(int slot) {
+    if (!_scroll.hasClients || _viewport <= 0) return;
+    final fraction = _last <= 0 ? 0.0 : slot / _last;
+    _scroll.jumpTo(
+      (fraction * _viewport * _zoom - _viewport / 2).clamp(
+        0.0,
+        _scroll.position.maxScrollExtent,
+      ),
+    );
+  }
+
+  void _setZoom(double zoom) {
+    if (_zoom == zoom) return;
+    final center =
+        _selected ??
+        g.slotAt(
+          (_scroll.hasClients ? _scroll.offset + _viewport / 2 : 0) /
+              (_viewport <= 0 ? 1 : _viewport * _zoom),
+        );
+    setState(() => _zoom = zoom);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _reveal(center);
+    });
+  }
+
+  Widget _control(
+    BuildContext c,
+    String label,
+    IconData icon,
+    VoidCallback? onTap, {
+    Key? key,
+    bool showLabel = false,
+  }) {
+    final p = P.of(c);
+    return Pressable(
+      key: key,
+      semanticLabel: label,
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: S.x2),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, size: 20, color: onTap == null ? p.ink3 : p.ink),
+            if (showLabel) ...[
+              const SizedBox(width: S.x2),
+              Flexible(
+                child: Text(label, style: F.cap.copyWith(color: p.ink)),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  List<String> _xLabels(BuildContext c) {
+    final l = AppLocalizations.of(c);
+    if (_zoom == 1) {
+      return [
+        l?.dayTimelineMidnight ?? 'Midnight',
+        g.slots == kDayMinutes
+            ? (l?.dayTimelineNoon ?? 'Noon')
+            : _clock((g.slots / 2).round()),
+        l?.dayTimelineMidnight ?? 'Midnight',
+      ];
+    }
+    final total = _viewport * _zoom;
+    final left = _scroll.hasClients ? _scroll.offset : 0.0;
+    if (total <= 0) return const [];
+    return [
+      _clock(g.slotAt(left / total)),
+      _clock(g.slotAt((left + _viewport / 2) / total)),
+      _clock(g.slotAt((left + _viewport) / total)),
+    ];
+  }
+
+  List<double?> get _visibleSeries {
+    if (_zoom == 1 || _viewport <= 0) return g.hr;
+    final total = _viewport * _zoom;
+    final left = _scroll.hasClients ? _scroll.offset : 0.0;
+    final from = g.slotAt(left / total).clamp(0, g.hr.length);
+    final until = (g.slotAt((left + _viewport) / total) + 1)
+        .clamp(from, g.hr.length);
+    return g.hr.sublist(from, until);
+  }
+
+  Widget _content(BuildContext c, {DetailOpener? open}) {
+    final p = P.of(c), l = AppLocalizations.of(c);
+    final axis = _axis;
+    if (axis == null) return const NoData();
+    double at(int m) => g.slots <= 0 ? 0 : m / g.slots;
+    final asleep = p.on(C.blue), workout = p.on(C.orange);
+    final height = widget.expanded
+        ? (MediaQuery.sizeOf(c).height * .45).clamp(240.0, 420.0)
+        : 200.0;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        if (widget.expanded) ...[
+          Wrap(
+            spacing: S.x1,
+            runSpacing: S.x1,
+            children: [
+              _control(
+                c,
+                l?.dayGraphZoomOut ?? 'Zoom out',
+                LucideIcons.zoomOut,
+                _zoom <= 1 ? null : () => _setZoom(_zoom / 2),
+                key: const ValueKey('day-hr-zoom-out'),
+              ),
+              _control(
+                c,
+                l?.dayGraphZoomIn ?? 'Zoom in',
+                LucideIcons.zoomIn,
+                _zoom >= 16 ? null : () => _setZoom(_zoom * 2),
+                key: const ValueKey('day-hr-zoom-in'),
+              ),
+              _control(
+                c,
+                l?.dayGraphFullDay ?? 'Full day',
+                LucideIcons.maximize,
+                _zoom == 1 ? null : () => _setZoom(1),
+                showLabel: true,
+              ),
+            ],
+          ),
+          const SizedBox(height: S.x2),
+        ],
+        ChartFrame(
+          title: l?.dayTimelineHeartRateTitle ?? 'Heart rate',
+          unit: 'bpm',
+          trailing: open == null
+              ? null
+              : _control(
+                  c,
+                  l?.dayGraphExpand ?? 'Expand graph',
+                  LucideIcons.expand,
+                  () => open<void>(
+                    _ExpandedDayGraph(
+                      graph: g,
+                      day: widget.day,
+                      selected: _selected,
+                    ),
+                  ),
+                  key: const ValueKey('day-hr-expand'),
+                ),
+          height: height,
+          yAxis: axis,
+          xLabels: _xLabels(c),
+          legend: [
+            if (g.rest.isNotEmpty) (l?.dayTimelineAsleep ?? 'Asleep', asleep),
+            if (g.work.isNotEmpty)
+              (l?.dayTimelineWorkout ?? 'Workout', workout),
+            if (g.movement.any((v) => v != null))
+              (l?.dayTimelineMoving ?? 'Moving', p.on(C.domMove)),
+            if (_gaps.isNotEmpty)
+              (l?.dayTimelineNotRecorded ?? 'Not recorded', p.card2),
+          ],
+          series: _visibleSeries,
+          child: LayoutBuilder(
+            builder: (c, box) {
+              _viewport = box.maxWidth;
+              return SingleChildScrollView(
+                key: ValueKey(
+                  widget.expanded ? 'day-hr-detail-pan' : 'day-hr-pan',
+                ),
+                controller: _scroll,
+                scrollDirection: Axis.horizontal,
+                physics: _zoom == 1
+                    ? const NeverScrollableScrollPhysics()
+                    : null,
+                child: SizedBox(
+                  width: box.maxWidth * _zoom,
+                  height: height,
+                  child: Scrubber(
+                    key: ValueKey(
+                      widget.expanded
+                          ? 'day-hr-detail-scrubber'
+                          : 'day-hr-scrubber',
+                    ),
+                    value: _selected == null ? null : _fraction,
+                    label: l?.dayTimelineHeartRateTitle ?? 'Heart rate',
+                    describe: (v) => _description(c, g.slotAt(v)),
+                    step: 1 / (_last <= 0 ? 1 : _last),
+                    longPressToScrub: true,
+                    onChanged: _select,
+                    child: RepaintBoundary(
+                      child: Stack(
+                        children: [
+                          Positioned.fill(
+                            child: CustomPaint(
+                              painter: DayLanes(
+                                p: p,
+                                gaps: [
+                                  for (final (a, b) in _gaps) (at(a), at(b)),
+                                ],
+                                rest: [
+                                  for (final (a, b, _) in g.rest)
+                                    (at(a), at(b), asleep),
+                                ],
+                                work: [
+                                  for (final (a, b, _) in g.work)
+                                    (at(a), at(b), workout),
+                                ],
+                                movement: g.movement,
+                              ),
+                            ),
+                          ),
+                          Positioned.fill(
+                            child: CustomPaint(
+                              painter: LineChart(
+                                g.hr,
+                                p.on(C.red),
+                                fill: false,
+                                axis: axis,
+                                selectedX: _selected == null ? null : _fraction,
+                              ),
+                            ),
+                          ),
+                          if (_selected != null &&
+                              g.readingAt(_selected!) != null)
+                            Positioned.fill(
+                              child: CustomPaint(
+                                painter: _DayHrMarker(
+                                  _fraction,
+                                  g.readingAt(_selected!)!,
+                                  axis,
+                                  p.on(C.red),
+                                  p.card,
+                                ),
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: S.x3),
+        if (_selected != null)
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _description(c, _selected!),
+              key: const ValueKey('day-hr-reading'),
+              style: F.cap.copyWith(color: p.ink),
+            ),
+          )
+        else
+          Text(
+            l?.dayGraphMinuteAverage ?? 'Average for this minute',
+            style: F.cap.copyWith(color: p.ink2),
+          ),
+        const SizedBox(height: S.x2),
+        Text(
+          l?.dayGraphHint ??
+              'Tap a point to inspect it. Hold and slide to follow the curve. '
+                  'Zoom in, then swipe sideways to move through the day.',
+          style: F.over.copyWith(color: p.ink3),
+        ),
+      ],
+    );
+  }
+
+  @override
+  Widget build(BuildContext c) => widget.expanded
+      ? Surface(child: _content(c))
+      : DetailLink(
+          builder: (open) => Surface(child: _content(c, open: open)),
+        );
+}
+
+class _DayHrMarker extends CustomPainter {
+  final double x, value;
+  final AxisSpec axis;
+  final Color color, surface;
+  const _DayHrMarker(this.x, this.value, this.axis, this.color, this.surface);
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final at = Offset(x * size.width, (1 - axis.t(value)) * size.height);
+    canvas.drawCircle(at, 5, Paint()..color = color);
+    canvas.drawCircle(at, 2, Paint()..color = surface);
+  }
+
+  @override
+  bool shouldRepaint(_DayHrMarker old) =>
+      x != old.x ||
+      value != old.value ||
+      axis != old.axis ||
+      color != old.color ||
+      surface != old.surface;
 }
 
 /// The page's body, given loaded data. Split out so the gallery can build every
@@ -921,10 +1245,15 @@ Widget? dayGraphCard(BuildContext c, DayGraph g) {
 List<Widget> timelineBody(BuildContext c, TimelineData d) {
   final p = P.of(c);
   final l = AppLocalizations.of(c);
-  final graph = dayGraphCard(c, d.graph);
   return [
-    ?graph,
-    if (d.moments.isEmpty && d.notes.isEmpty && graph == null)
+    if (d.graph.hasCurve) ...[
+      detailLinkRow(c, LucideIcons.heartPulse,
+        l?.dayTimelineHeartRateTitle ?? 'Heart rate',
+        prettyDay(d.day, l), null,
+        destination: MetricDetail('resting_hr', day: d.day)),
+      const SizedBox(height: S.x3),
+    ],
+    if (d.moments.isEmpty && d.notes.isEmpty && !d.graph.hasCurve)
       StatusCard(
         l?.dayTimelineNothingRecordedTitle ?? 'Nothing was recorded on this day',
         l?.dayTimelineNothingRecordedBody ??
@@ -940,9 +1269,8 @@ List<Widget> timelineBody(BuildContext c, TimelineData d) {
           icon: LucideIcons.clock,
         )
       else
-        // The written half of the same day. It carries its own heading now
-        // that the picture is above it: the graph says when, this says what,
-        // and without a name between them the rows read as a caption.
+        // The activity list keeps its day while the heart-rate link opens
+        // the same date in the shared heart view.
         Section(
           l?.dayTimelineWhatHappenedSection ?? 'What happened',
           Surface(

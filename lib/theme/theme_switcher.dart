@@ -5,7 +5,7 @@
 //     dependency edge telling it what to rebuild when the mode flips. We fix
 //     that by making every route rebuild: the home stack watches the controller
 //     (see app.dart), and pushed routes go through [themedRoute], whose body is
-//     a [_ThemeReactive] that depends on the controller and reconstructs its
+//     a [ThemeReactive] that depends on the controller and reconstructs its
 //     screen on change (State is preserved — same type at the same position).
 //  2) A hard colour swap looks janky. [ThemeSwitchOverlay] snapshots the live
 //     frame the instant before the swap and cross-fades it out over the freshly
@@ -41,12 +41,13 @@ PageRoute<T> themedRoute<T>(
 }) => MaterialPageRoute<T>(
   fullscreenDialog: fullscreenDialog,
   settings: RouteSettings(name: name),
-  builder: (ctx) => _ThemeReactive(builder: builder),
+  builder: (ctx) => ThemeReactive(builder: builder),
 );
 
-class _ThemeReactive extends StatelessWidget {
+/// Keeps custom Material routes on the same theme rebuild path as themedRoute.
+class ThemeReactive extends StatelessWidget {
   final WidgetBuilder builder;
-  const _ThemeReactive({required this.builder});
+  const ThemeReactive({super.key, required this.builder});
   @override
   Widget build(BuildContext context) {
     // Depend on the controller → this route's body rebuilds when the mode flips,

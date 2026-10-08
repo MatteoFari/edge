@@ -4,13 +4,22 @@
 // the safe-trim commit, and the ownership lists (salvage, backup restore,
 // wipe). Runs the REAL LocalDb over sqflite_common_ffi.
 
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:openstrap_edge/data/db.dart';
 import 'package:openstrap_edge/data/models.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+class _Paths extends PathProviderPlatform {
+  _Paths(this.path);
+  final String path;
+  @override
+  Future<String?> getApplicationDocumentsPath() async => path;
+}
 
 Uint8List _i16le(List<int> v) {
   final out = Uint8List(v.length * 2);
@@ -70,18 +79,25 @@ Map<String, Object?> _packet(
 };
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  late Directory testDirectory;
+  late String previousDbName;
+  late PathProviderPlatform previousPaths;
   setUpAll(() async {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
-    LocalDb.dbName = 'openstrap_ecg_db_test.db';
-    final dir = await databaseFactory.getDatabasesPath();
-    await databaseFactory.deleteDatabase(p.join(dir, LocalDb.dbName));
+    previousDbName = LocalDb.dbName;
+    previousPaths = PathProviderPlatform.instance;
+    testDirectory = await Directory.systemTemp.createTemp('ecg_db_');
+    PathProviderPlatform.instance = _Paths(testDirectory.path);
+    LocalDb.dbName = p.join(testDirectory.path, 'openstrap_ecg_db_test.db');
   });
 
   tearDownAll(() async {
     await LocalDb.close();
-    final dir = await databaseFactory.getDatabasesPath();
-    await databaseFactory.deleteDatabase(p.join(dir, LocalDb.dbName));
+    LocalDb.dbName = previousDbName;
+    PathProviderPlatform.instance = previousPaths;
+    await testDirectory.delete(recursive: true);
   });
 
   test(

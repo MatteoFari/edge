@@ -12,8 +12,12 @@
 // period, newest-wins. Today's card reads it synchronously at build (no async
 // flash); a stale (previous-day) slot simply reads back as null. This is a
 // cache, not a record: losing it only means a regenerate.
+// Read state is separate from those replaceable slots and keyed to each
+// generated note, so writing a replacement never consumes its unread state.
 
 import 'dart:convert';
+
+import 'package:crypto/crypto.dart';
 
 import '../data/day_label.dart';
 import '../state/prefs.dart';
@@ -33,6 +37,8 @@ BriefingPeriod currentBriefingPeriod(DateTime now) =>
     now.hour >= 17 ? BriefingPeriod.evening : BriefingPeriod.morning;
 
 class Briefing {
+  final String? _storedId;
+
   /// Local day label (YYYY-MM-DD) the briefing belongs to.
   final String day;
   final BriefingPeriod period;
@@ -50,13 +56,30 @@ class Briefing {
   final Map<String, dynamic> inputs;
 
   const Briefing({
+    String? id,
     required this.day,
     required this.period,
     required this.oneLiner,
     required this.breakdownMd,
     required this.generatedAtMs,
     required this.inputs,
-  });
+  }) : _storedId = id;
+
+  /// Identity of one generated note, preserved when its cache slot is read.
+  /// Older cached notes have no ID; their generation metadata and text supply
+  /// a deterministic identity without changing or rewriting their contents.
+  String get id {
+    final stored = _storedId;
+    if (stored != null && stored.isNotEmpty) return stored;
+    final legacy = jsonEncode([
+      day,
+      period.id,
+      generatedAtMs,
+      oneLiner,
+      breakdownMd,
+    ]);
+    return 'legacy-${sha256.convert(utf8.encode(legacy))}';
+  }
 
   /// Whether producing this note involved a model at all.
   ///
@@ -69,6 +92,7 @@ class Briefing {
       period != BriefingPeriod.evening || inputs.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
+        'id': id,
         'day': day,
         'period': period.id,
         'one_liner': oneLiner,
@@ -82,7 +106,9 @@ class Briefing {
     final day = j['day'];
     final one = j['one_liner'];
     if (day is! String || one is! String) return null;
+    final id = j['id'];
     return Briefing(
+      id: id is String && id.isNotEmpty ? id : null,
       day: day,
       period: j['period'] == 'evening'
           ? BriefingPeriod.evening
@@ -123,7 +149,10 @@ class BriefingStore {
   BriefingStore._();
 
   static String _slotKey(BriefingPeriod p) => 'ai.briefing.${p.id}';
+  static String _readKey(String id) => 'ai.briefing.read.$id';
   static const String _kJournalDoneDay = 'ai.journal_done_day';
+  static final Map<String, Future<bool>> _readWrites = {};
+  static final Set<String> _uncommittedReadIds = {};
 
   /// Synchronous read of the cached briefing for [period]. Returns null when
   /// nothing is cached or the cached slot belongs to a different day than
@@ -143,6 +172,42 @@ class BriefingStore {
 
   static void write(Briefing b) =>
       Prefs.setString(_slotKey(b.period), jsonEncode(b.toJson()));
+
+  /// Reading the cache or generating a note never changes this marker.
+  static bool isRead(Briefing b) {
+    if (_uncommittedReadIds.contains(b.id)) return false;
+    try {
+      return Prefs.getBool(_readKey(b.id), false);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Call only after this note's content has successfully been displayed.
+  /// The marker becomes visible after storage acknowledges it, and repeated
+  /// calls for the same note share one write. Empty/failed loads cannot consume
+  /// unread state. A failed write can be retried on a subsequent opening.
+  static Future<bool> markRead(Briefing b) {
+    if (b.oneLiner.trim().isEmpty && b.breakdownMd.trim().isEmpty) {
+      return Future.value(false);
+    }
+    if (isRead(b)) return Future.value(true);
+    return _readWrites[b.id] ??= _persistRead(b.id);
+  }
+
+  static Future<bool> _persistRead(String id) async {
+    // SharedPreferences sets its cache before the platform acknowledges a
+    // write. Keep pending/refused markers unread instead of trusting that
+    // optimistic cache as evidence of persistence.
+    _uncommittedReadIds.add(id);
+    try {
+      final saved = await Prefs.setBoolAcked(_readKey(id), true);
+      if (saved) _uncommittedReadIds.remove(id);
+      return saved;
+    } finally {
+      _readWrites.remove(id);
+    }
+  }
 
   // ── journal "done for today" (suppresses tonight's pre-sleep nudge) ─────────
 

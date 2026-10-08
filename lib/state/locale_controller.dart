@@ -2,6 +2,8 @@
 // Persisted on-device via SharedPreferences, mirroring ThemeController /
 // UnitsController. Null means follow the OS locale.
 
+import 'dart:ui' show PlatformDispatcher;
+
 import 'package:flutter/widgets.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -26,6 +28,26 @@ class LocaleController extends ChangeNotifier {
         ? stored
         : null;
     return LocaleController._(code);
+  }
+
+  /// Resolve app copy without a widget context (for OS notifications).
+  /// The saved override wins; otherwise use the same supported-language
+  /// fallback as MaterialApp. Nothing is written by this read.
+  static Future<AppLocalizations> presentationLocalizations() async {
+    String? stored;
+    try {
+      stored = (await SharedPreferences.getInstance()).getString(_kLocale);
+    } catch (_) {}
+    final supported = AppLocalizations.supportedLocales;
+    if (stored != null && supported.any((l) => l.languageCode == stored)) {
+      return lookupAppLocalizations(Locale(stored));
+    }
+    for (final locale in PlatformDispatcher.instance.locales) {
+      if (supported.any((l) => l.languageCode == locale.languageCode)) {
+        return lookupAppLocalizations(Locale(locale.languageCode));
+      }
+    }
+    return lookupAppLocalizations(const Locale('en'));
   }
 
   /// null = system default.

@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import 'ai/briefing.dart' show BriefingPeriod;
 import 'coach/coach_config.dart';
+import 'health/health_weight_import.dart';
 import 'l10n/app_localizations.dart';
 import 'notify/notification_service.dart';
 import 'notify/tap_router.dart';
@@ -28,6 +29,7 @@ import 'ui2/profile/alarm.dart';
 import 'ui2/profile/profile.dart';
 import 'ui2/screens/ai_briefing.dart';
 import 'ui2/screens/calm_breathing.dart';
+import 'ui2/screens/coach_host.dart';
 import 'ui2/screens/what_changed.dart';
 import 'ui2/screens/health_screen.dart';
 import 'ui2/screens/home_screen.dart';
@@ -55,10 +57,18 @@ class _OpenStrapAppState extends State<OpenStrapApp> with WidgetsBindingObserver
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       context.read<AppState>().attachCoachConfig(context.read<CoachConfig>());
+      unawaited(_startWeightImport());
 
       final app = context.read<AppState>();
       if (app.isPaired) app.openSession();
     });
+  }
+
+  Future<void> _startWeightImport() async {
+    await AutoWeightImport.start();
+    if (mounted && WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+      await AutoWeightImport.onForeground();
+    }
   }
 
   @override
@@ -103,6 +113,7 @@ class _OpenStrapAppState extends State<OpenStrapApp> with WidgetsBindingObserver
       // delivering whenever the OS feels like it is worse than one that is
       // honest about when it fires.
       unawaited(app.runBackupIfDue());
+      unawaited(AutoWeightImport.onForeground());
       // Re-publish the widget snapshot. `has_data` is decided WHEN THE
       // SNAPSHOT IS WRITTEN (WidgetService.push evaluates isStale there), and
       // the widget process never runs Dart — so a snapshot written while fresh
@@ -130,9 +141,13 @@ class _OpenStrapAppState extends State<OpenStrapApp> with WidgetsBindingObserver
       title: 'OpenStrap',
       debugShowCheckedModeBanner: false,
       // The palette is the design system's, the CHOICE is still the user's.
-      theme: buildTheme(Brightness.light),
-      darkTheme: buildTheme(Brightness.dark),
+      theme: buildTheme(Brightness.light, style: theme.interfaceStyle,
+          palette: theme.palette),
+      darkTheme: buildTheme(Brightness.dark, style: theme.interfaceStyle,
+          palette: theme.palette),
       themeMode: theme.materialThemeMode,
+      themeAnimationStyle:
+          Motion.enabled(context) ? null : AnimationStyle.noAnimation,
       locale: locale.locale, // null = follow the OS locale
       // First, so a 12-hour choice reaches the time pickers (see the delegate).
       localizationsDelegates: [
@@ -494,8 +509,13 @@ class _Shell extends StatefulWidget {
 
 class _ShellState extends State<_Shell> {
   /// Restore the last-selected tab so a relaunch lands where the user left off.
-  late ShellDomain _domain = ShellDomain
-      .values[Prefs.getInt(Prefs.shellTab, 0).clamp(0, ShellDomain.values.length - 1)];
+  late ShellDomain _domain = _restoredDomain();
+
+  ShellDomain _restoredDomain() {
+    final saved = ShellDomain.values[
+        Prefs.getInt(Prefs.shellTab, 0).clamp(0, ShellDomain.values.length - 1)];
+    return visibleShellDomains.contains(saved) ? saved : ShellDomain.home;
+  }
 
   /// AppShell owns its own selection and takes only an `initial`, so a
   /// programmatic jump re-keys it.
@@ -574,16 +594,25 @@ class _ShellState extends State<_Shell> {
       }
       return;
     }
-    if (tab >= 0) _go(domainForTab(tab));
+    if (tab >= 0) {
+      final domain = domainForTab(tab);
+      _go(domain);
+      // Existing nutrition notification links remain usable without a tab.
+      if (domain == ShellDomain.nutrition) {
+        Navigator.of(context).push(themedRoute<void>(
+            (_) => const NutritionScreen(), name: 'NutritionScreen'));
+      }
+    }
   }
 
   void _go(ShellDomain d) {
-    if (d == _domain) return;
+    final target = visibleShellDomains.contains(d) ? d : ShellDomain.home;
+    if (target == _domain) return;
     setState(() {
-      _domain = d;
+      _domain = target;
       _rev++;
     });
-    Prefs.setInt(Prefs.shellTab, d.index);
+    Prefs.setInt(Prefs.shellTab, target.index);
   }
 
   @override
@@ -598,12 +627,13 @@ class _ShellState extends State<_Shell> {
     // SELECT, not watch: a bool that flips twice a workout, not the ~1 Hz
     // AppState tick.
     final live = context.select<AppState, bool>((a) => a.activeWorkout != null);
-    return AppShell(
+    return CoachHost(domain: _domain, builder: (context, coachEntry) => AppShell(
       key: ValueKey(_rev),
       initial: _domain,
       banner: live ? const _LiveSessionBar() : null,
+      coachEntry: coachEntry,
       onSelect: (d) {
-        _domain = d;
+        setState(() => _domain = d);
         Prefs.setInt(Prefs.shellTab, d.index);
       },
       builder: (c, d) => switch (d) {
@@ -613,7 +643,7 @@ class _ShellState extends State<_Shell> {
         ShellDomain.workout => const WorkoutScreen(),
         ShellDomain.wellness => const WellnessScreen(),
       },
-    );
+    ));
   }
 }
 
@@ -625,11 +655,30 @@ class _ShellState extends State<_Shell> {
 /// could end it was the iOS Live Activity's Finish button. Android had
 /// nothing at all.
 ///
-/// No clock: the elapsed time would be stale the moment it was painted, and a
-/// per-second rebuild of the whole shell to keep one number honest is not a
-/// trade worth making. The number is on the screen this taps through to.
-class _LiveSessionBar extends StatelessWidget {
+/// Only this card ticks; the shell and its retained pages do not rebuild.
+class _LiveSessionBar extends StatefulWidget {
   const _LiveSessionBar();
+
+  @override
+  State<_LiveSessionBar> createState() => _LiveSessionBarState();
+}
+
+class _LiveSessionBarState extends State<_LiveSessionBar> {
+  Timer? _timer;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer = Timer.periodic(Motion.tick, (_) {
+      if (mounted && TickerMode.valuesOf(context).enabled) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
 
   /// The activity behind the open session.
   ///
@@ -642,21 +691,20 @@ class _LiveSessionBar extends StatelessWidget {
   static Activity? _activityFor(AppState app) => activityByName(
       LiveDraft.current?.activityKey ?? app.activeWorkout?.type);
 
-  Future<void> _resume(BuildContext c) async {
+  Future<void> _resume(BuildContext c, DetailOpener open) async {
     final app = c.read<AppState>();
+    final session = app.activeWorkout;
     final draft = LiveDraft.current;
     final a = _activityFor(app);
-    if (a == null) return;
-    final nav = Navigator.of(c);
+    if (a == null || session == null) return;
     // The lifter's previous and best. Absent renders as "First time on this
     // lift", which would be a false claim on a resumed session.
     final history = await loadSetHistory();
-    await nav.push(MaterialPageRoute<void>(
-      builder: (_) => liveFor(a,
+    if (!c.mounted || !identical(app.activeWorkout, session)) return;
+    await open<void>(liveFor(a,
           private: draft?.private ?? false,
           weightKg: draft?.weightKg,
-          host: activityHost(app, history: history)),
-    ));
+          host: activityHost(app, history: history)));
   }
 
   @override
@@ -670,6 +718,17 @@ class _LiveSessionBar extends StatelessWidget {
     // with every later one refused. Offer the one action that is certainly
     // right rather than a button that opens the wrong screen.
     if (a == null) {
+      if (isExpressive(c)) {
+        return Surface(
+          onTap: () => app.stopWorkout(),
+          semanticLabel: 'Finish the session that is still running',
+          child: Row(children: [
+            Expanded(child: Text('Session running — tap to finish',
+                style: F.body.copyWith(color: p.ink))),
+            Icon(LucideIcons.square, size: S.x5, color: p.on(C.red)),
+          ]),
+        );
+      }
       return Container(
         decoration: BoxDecoration(
           color: p.card,
@@ -692,14 +751,24 @@ class _LiveSessionBar extends StatelessWidget {
         ),
       );
     }
-    return Container(
+    if (isExpressive(c)) {
+      final draft = LiveDraft.current;
+      final started = app.activeWorkout?.startTime;
+      final elapsed = draft?.elapsedSec ??
+          (started == null ? 0 : DateTime.now().difference(started).inSeconds.clamp(0, 1 << 31));
+      return LiveSessionCard(a,
+          elapsed: elapsed,
+          paused: draft?.pausedAt != null,
+          onNavigate: (open) => _resume(c, open));
+    }
+    return DetailLink(builder: (open) => Container(
       decoration: BoxDecoration(
         color: p.card,
         border: Border(top: BorderSide(color: p.line)),
       ),
       child: Pressable(
         semanticLabel: 'Back to your ${a.name.toLowerCase()} session',
-        onTap: () => _resume(c),
+        onTap: () => _resume(c, open),
         child: Padding(
           padding: const EdgeInsets.symmetric(
               horizontal: S.x4, vertical: S.x3),
@@ -729,6 +798,6 @@ class _LiveSessionBar extends StatelessWidget {
           ]),
         ),
       ),
-    );
+    ));
   }
 }

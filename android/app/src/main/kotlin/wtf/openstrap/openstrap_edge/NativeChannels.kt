@@ -64,6 +64,8 @@ object NativeChannels {
     fun register(engine: FlutterEngine, context: Context) {
         val app = context.applicationContext
 
+        WeightImportBridge.register(engine, app)
+        BackupFolderBridge.register(engine, app)
         HealthConnectSleepWriter.register(engine, app)
         HealthConnectHeartRateWriter.register(engine, app)
         // The phone's own step counter. Registered here (from EdgeApplication.ensureEngine,

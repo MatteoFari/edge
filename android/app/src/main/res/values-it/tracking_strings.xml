@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tracking_title">Sincronizzazione Edge</string>
+    <string name="tracking_channel_description">Mantiene il braccialetto sincronizzato in background</string>
+    <string name="tracking_body">Sincronizzazione del braccialetto in corso</string>
+</resources>

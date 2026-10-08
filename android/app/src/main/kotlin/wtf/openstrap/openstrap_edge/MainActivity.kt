@@ -40,6 +40,7 @@ class MainActivity : FlutterFragmentActivity() {
         activityAttached = true
         clearPendingHeadlessBoot()
         super.onCreate(savedInstanceState)
+        WeightImportBridge.attach(this)
         CompanionBridge.currentActivity = this
         // Re-arm CDM device-presence observation for an already-associated band
         // (idempotent; no-op below API 31 or when nothing is associated).
@@ -58,6 +59,8 @@ class MainActivity : FlutterFragmentActivity() {
     }
 
     override fun onDestroy() {
+        WeightImportBridge.detach(isFinishing)
+        if (isFinishing) BackupFolderBridge.cancelPicker()
         if (CompanionBridge.currentActivity === this) {
             CompanionBridge.currentActivity = null
         }
@@ -80,6 +83,9 @@ class MainActivity : FlutterFragmentActivity() {
 
     @Deprecated("Deprecated in AndroidX; Flutter still routes plugin results through it")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (BackupFolderBridge.handleActivityResult(applicationContext, requestCode, resultCode, data)) {
+            return
+        }
         // CDM association dialog result → CompanionBridge (consumed there).
         if (CompanionBridge.handleActivityResult(applicationContext, requestCode, resultCode)) {
             return

@@ -23,6 +23,7 @@ import '../../state/app_state.dart';
 import '../ui2.dart';
 import 'beats.dart';
 import 'day_steps.dart';
+import 'day_timeline.dart' show DayGraph, DayTimelineScreen, dayGraph, dayGraphCard;
 import 'home_screen.dart';
 import 'investigate.dart';
 import 'journal_compose.dart' show OsTextField;
@@ -153,6 +154,19 @@ const _specs = <String, MetricSpec>{
         'periodic modulation breathing imposes on beat timing — over a grid of '
         'candidate rates.',
     citation: 'Pimentel 2017',
+    requires: {InputSignal.rrIntervals},
+  ),
+  'resp_rate_experimental': MetricSpec(
+    chartKey: 'resp_rate_experimental',
+    title: 'Breathing rate',
+    unit: 'br/min',
+    color: C.teal,
+    icon: LucideIcons.wind,
+    higherBetter: false,
+    method: 'Breathing rate estimated from beat timing during sleep. Fixed '
+        'five-minute windows track fresh spectral evidence across the night. '
+        'Weak or competing signals stay blank.',
+    citation: 'Local research adaptation · Pirhonen / Vehkaoja 2020',
     requires: {InputSignal.rrIntervals},
   ),
   'sleep': MetricSpec(
@@ -401,9 +415,24 @@ const _specs = <String, MetricSpec>{
   // charted forms of two of the three and they stay.
 };
 
-MetricSpec specOf(String key) =>
-    _specs[key] ??
-    MetricSpec(chartKey: key, title: key.replaceAll('_', ' '));
+MetricSpec specOf(String key, [AppLocalizations? l]) {
+  final spec = _specs[key] ??
+      MetricSpec(chartKey: key, title: key.replaceAll('_', ' '));
+  if (l == null || !_specs.containsKey(key)) return spec;
+  return MetricSpec(
+    chartKey: spec.chartKey,
+    title: l.metricName(key, spec.title),
+    unit: spec.unit == 'steps' ? l.dayStepsUnit : spec.unit,
+    color: spec.color,
+    icon: spec.icon,
+    higherBetter: spec.higherBetter,
+    suppress: key == 'skin_temp' ? l.metricSkinTemperatureSuppressed : spec.suppress,
+    suppressFix: key == 'skin_temp' ? l.metricSkinTemperatureFix : spec.suppressFix,
+    method: l.metricMethod(key),
+    citation: spec.citation,
+    requires: spec.requires,
+  );
+}
 
 /// Which cross-day percentile block and journal outcome, if any, belongs to
 /// this metric. Only four outcomes are correlated by the journal engine.
@@ -647,7 +676,9 @@ bool _labelSources(MetricData d) {
 class MetricDetail extends StatefulWidget {
   final String metricKey;
   final MetricData? data;
-  const MetricDetail(this.metricKey, {super.key, this.data});
+  /// End date of the displayed window; null follows the current local day.
+  final String? day;
+  const MetricDetail(this.metricKey, {super.key, this.data, this.day});
 
   @override
   State<MetricDetail> createState() => _MetricDetailState();
@@ -658,11 +689,14 @@ class _MetricDetailState extends State<MetricDetail> {
   // is it right now" and "what has it been lately" are different questions,
   // and a range list that starts at 7 days made the first one unanswerable.
   static const _windows = [1, 7, 30, 182, 365];
+  DateTime get _end => DateTime.tryParse(widget.day ?? '') ?? DateTime.now();
 
   List<String> _labelsOf(BuildContext c) {
     final l = AppLocalizations.of(c);
     return [
-      l?.metricDetailToday ?? 'Today',
+      widget.day == null || widget.day == todayLabel()
+          ? (l?.metricDetailToday ?? 'Today')
+          : prettyDay(widget.day, l),
       l?.metricDetailRange7Days ?? '7 days',
       l?.metricDetailRange30Days ?? '30 days',
       l?.metricDetailRange6Months ?? '6 months',
@@ -796,7 +830,7 @@ class _MetricDetailState extends State<MetricDetail> {
       return;
     }
     try {
-      final spec = specOf(widget.metricKey);
+      final spec = specOf(widget.metricKey, AppLocalizations.of(context));
       // Registry-only, no query — cheap regardless of device count. The
       // protected single-device case is guarded downstream, not here:
       // `candidates.length < 2` (below) drops this to `const []` before
@@ -839,15 +873,17 @@ class _MetricDetailState extends State<MetricDetail> {
   @override
   Widget build(BuildContext c) {
     final l = AppLocalizations.of(c);
-    final spec = specOf(widget.metricKey);
+    final spec = specOf(widget.metricKey, AppLocalizations.of(context));
     final d = _d ?? const MetricData();
 
-    final all = d.series;
+    final all = widget.day == null
+        ? d.series
+        : d.series.where((p) => (daysBehind(p.t, end: _end) ?? -1) >= 0).toList();
     final win = _windows[_range.clamp(0, _offered(d) - 1)];
     // Dense: one slot per calendar day in the window, `null` where no day
     // derived. The painter breaks the line at a null rather than joining over
     // it, and the axis labels can be dated because the slots ARE the dates.
-    final series = denseDays(all, win);
+    final series = denseDays(all, win, end: _end);
     final vals = [for (final v in series) ?v];
 
     return detailScaffold(c, spec.title, [
@@ -862,6 +898,8 @@ class _MetricDetailState extends State<MetricDetail> {
         const SizedBox(height: S.x2),
         const LiveHrCard(),
         const SizedBox(height: S.x5),
+        _DayHeartRateHistory(day: widget.day ?? todayLabel()),
+        const SizedBox(height: S.x5),
       ],
       if (spec.suppress != null) ...[
         const SizedBox(height: S.x2),
@@ -872,7 +910,7 @@ class _MetricDetailState extends State<MetricDetail> {
           icon: spec.icon,
         ),
         const SizedBox(height: S.x5),
-        investigateRow(c, () => go(c, Investigate(widget.metricKey))),
+        investigateRow(c, null, destination: Investigate(widget.metricKey)),
       ] else if (vals.isEmpty) ...[
         _ranges(c, d, spec.color),
         const SizedBox(height: S.x5),
@@ -917,7 +955,7 @@ class _MetricDetailState extends State<MetricDetail> {
               steps: null, goal: d.stepGoal, color: spec.color, onSaved: _load),
         ],
         const SizedBox(height: S.x5),
-        investigateRow(c, () => go(c, Investigate(widget.metricKey))),
+        investigateRow(c, null, destination: Investigate(widget.metricKey)),
       ] else ...[
         _ranges(c, d, spec.color),
         const SizedBox(height: S.x5),
@@ -939,7 +977,9 @@ class _MetricDetailState extends State<MetricDetail> {
         // the whole series.
         Section(
             l?.metricDetailNormalRangeSection ?? 'Your normal range',
-            _range3(c, spec, win == 1 ? valuesOf(all) : vals, d.percentile,
+            _range3(c, spec, win == 1 ? valuesOf(all) : vals,
+                widget.day == null || widget.day == todayLabel()
+                    ? d.percentile : null,
                 all.isEmpty ? null : all.last.t)),
         if (d.movers.isNotEmpty)
           Section(l?.metricDetailWhatMovesItSection ?? 'What moves it',
@@ -965,7 +1005,7 @@ class _MetricDetailState extends State<MetricDetail> {
               l?.metricDetailBeatsLinkTitle ?? 'Beats',
               l?.metricDetailBeatsLinkSub ??
                   'The intervals a night is made of, drawn',
-              () => go(c, const Beats())),
+              null, destination: const Beats()),
           const SizedBox(height: S.x3),
         ],
         // TODAY ONLY, and it is called Breakdown.
@@ -983,12 +1023,14 @@ class _MetricDetailState extends State<MetricDetail> {
               c,
               LucideIcons.footprints,
               l?.metricDetailBreakdownLinkTitle ?? 'Breakdown',
-              l?.metricDetailBreakdownLinkSub ??
-                  'Each stretch of today, and what counted it',
-              () => go(c, const DayStepsDetail())),
+              widget.day == null || widget.day == todayLabel()
+                  ? (l?.metricDetailBreakdownLinkSub ??
+                      'Each stretch of today, and what counted it')
+                  : prettyDay(widget.day, l),
+              null, destination: DayStepsDetail(day: widget.day)),
           const SizedBox(height: S.x3),
         ],
-        investigateRow(c, () => go(c, Investigate(widget.metricKey))),
+        investigateRow(c, null, destination: Investigate(widget.metricKey)),
       ],
     ]);
   }
@@ -1083,7 +1125,7 @@ class _MetricDetailState extends State<MetricDetail> {
 
   Future<void> _prefer(DeviceOption o) async {
     if (_d == null || !mounted) return;
-    final spec = specOf(widget.metricKey);
+    final spec = specOf(widget.metricKey, AppLocalizations.of(context));
     // PER SIGNAL, never per metric. "Priority for readiness" has no meaning —
     // readiness has four inputs (final-plan §4.5). A per-metric control is
     // therefore a mapping DOWN to that metric's signals, written for each of
@@ -1154,7 +1196,7 @@ class _MetricDetailState extends State<MetricDetail> {
     // WHICH DAY the newest reading is from. `metric_series` gets a row only on
     // a day that derives, so after a sync gap the newest stored point is days
     // old — and this line is the answer to "is there a today?".
-    final asOf = all.isEmpty ? '' : axisDay(all.last.t);
+    final asOf = all.isEmpty ? '' : axisDay(all.last.t, l: l);
 
     return Surface(
       child: Column(children: [
@@ -1175,7 +1217,7 @@ class _MetricDetailState extends State<MetricDetail> {
           alignment: Alignment.centerLeft,
           child: Text(
             win == 1
-                ? (l?.metricDetailToday ?? 'Today')
+                ? _labelsOf(c).first
                 : (l?.metricDetailDailyAverage(vals.length, win) ??
                     'Daily average · ${vals.length} of $win days'),
             style: F.cap.copyWith(color: p.ink3),
@@ -1265,7 +1307,7 @@ class _MetricDetailState extends State<MetricDetail> {
           final marks = <double>[
             if (series.length > 1)
               for (final t in algoBreaks)
-                if (daysBehind(t) case final b?
+                if (daysBehind(t, end: _end) case final b?
                     when b >= 0 && b < series.length && series.length - 1 - b > 0)
                   (series.length - 1 - b - .5) / (series.length - 1),
           ];
@@ -1409,7 +1451,8 @@ class _MetricDetailState extends State<MetricDetail> {
         if (win >= 30 && spec.chartKey != 'wear' && wear.isNotEmpty)
           Builder(builder: (c) {
             final hrs = [
-              for (final v in denseDays(wear, win)) v == null ? null : v / 60,
+              for (final v in denseDays(wear, win, end: _end))
+                v == null ? null : v / 60,
             ];
             final have = [for (final v in hrs) ?v];
             if (have.isEmpty) return const SizedBox.shrink();
@@ -1448,12 +1491,12 @@ class _MetricDetailState extends State<MetricDetail> {
 
   double _slotAt01(int i, int len) => len < 2 ? 0 : i / (len - 1);
 
-  /// The calendar day a dense slot stands for. Slot `len - 1` is today and
+  /// The calendar day a dense slot stands for. Slot `len - 1` is the end day and
   /// slot 0 is `len - 1` days behind it — the same arithmetic [denseDays] fills
   /// with, walked through [DateTime]'s own calendar so the two days a year that
   /// are 23 or 25 hours long land on the right date.
   String _dayOfSlot(int i, int len) {
-    final n = DateTime.now();
+    final n = _end;
     return dayLabelOf(DateTime(n.year, n.month, n.day - (len - 1 - i)));
   }
 
@@ -1532,7 +1575,7 @@ class _MetricDetailState extends State<MetricDetail> {
       child: Surface(
         color: p.card2,
         elevation: 0,
-        onTap: v == null ? null : () => go(c, _dayScreen(widget.metricKey, day)),
+        destination: v == null ? null : _dayScreen(widget.metricKey, day),
         semanticLabel: [
           v == null
               ? (l?.metricDetailSlotNoRecord(prettyDay(day, l)) ??
@@ -1544,7 +1587,7 @@ class _MetricDetailState extends State<MetricDetail> {
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             Expanded(
-              child: Text(dayNavLabel(day),
+              child: Text(dayNavLabel(day, l),
                   style: F.body
                       .copyWith(color: p.ink, fontWeight: FontWeight.w600),
                   maxLines: 1,
@@ -1633,11 +1676,11 @@ class _MetricDetailState extends State<MetricDetail> {
                               'history — $band.'))
                   : (band == null
                       ? (l?.metricDetailPercentileFromNoBand(
-                              axisDay(latestTs), ordinal) ??
+                              axisDay(latestTs, l: l), ordinal) ??
                           'Your reading from ${axisDay(latestTs)} sits at the '
                               '$ordinal percentile of your own history.')
                       : (l?.metricDetailPercentileFromBand(
-                              axisDay(latestTs), ordinal, band) ??
+                              axisDay(latestTs, l: l), ordinal, band) ??
                           'Your reading from ${axisDay(latestTs)} sits at the '
                               '$ordinal percentile of your own history — '
                               '$band.'))),
@@ -1658,6 +1701,7 @@ class _MetricDetailState extends State<MetricDetail> {
       case 'de':
         return '$n.';
       case 'es':
+      case 'it':
         return '$nº';
       case 'hi':
       case 'zh':
@@ -1734,7 +1778,7 @@ class _MetricDetailState extends State<MetricDetail> {
     return '${v >= 0 ? '+' : '−'}$s${unit == null || unit.isEmpty ? '' : ' $unit'}';
   }
 
-  String _fmt(MetricSpec spec, double v) => metricValue(spec.unit, v);
+  String _fmt(MetricSpec spec, double v) => metricValue(spec.unit, v, AppLocalizations.of(context));
 }
 
 /// Today's steps against the goal, as one small ring — the same [Ring]
@@ -1744,6 +1788,154 @@ class _MetricDetailState extends State<MetricDetail> {
 /// Same 500–100,000 bound as `LocalRepositoryImpl.setStepGoal` — this is the
 /// UI writer of `step_goal`, through `AppState.updateProfile` directly rather
 /// than through that method.
+/// The day's recorded curve stays separate from both live HR and nightly RHR.
+class _DayHeartRateHistory extends StatefulWidget {
+  final String day;
+  const _DayHeartRateHistory({required this.day});
+
+  @override
+  State<_DayHeartRateHistory> createState() => _DayHeartRateHistoryState();
+}
+
+class _DayHeartRateHistoryState extends State<_DayHeartRateHistory>
+    with RevisionReload<_DayHeartRateHistory> {
+  DayGraph _graph = const DayGraph();
+  List<DeviceOption> _candidates = const [];
+  String? _device, _oldest;
+  bool _loading = true, _failed = false, _bounded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void didUpdateWidget(covariant _DayHeartRateHistory old) {
+    super.didUpdateWidget(old);
+    if (old.day != widget.day) {
+      _device = null;
+      _load();
+    }
+  }
+
+  @override
+  void reload() => _load();
+
+  Future<void> _load() async {
+    if (!mounted) return;
+    final token = beginRead(#heartRate);
+    final repo = repoOf(context);
+    final day = widget.day;
+    final device = _device;
+    setState(() {
+      _loading = true;
+      _failed = false;
+    });
+    try {
+      if (repo == null) throw StateError('repository unavailable');
+      final raw = await repo.getDayTimeline(day);
+      // An explicit date must never be labelled with a held-over day's curve.
+      final matches = raw['date'] == null || raw['date'] == day;
+      final selected = device == null || !matches
+          ? null
+          : await repo.getDeviceChart('hr', deviceId: device, date: day);
+      if (!mounted || !stillNewest(#heartRate, token)) return;
+      final candidates = signalCandidates(
+        context,
+        context.read<AppState>(),
+        requires: {InputSignal.hr1Hz},
+      );
+      final bounded = selected?['bounded'] == true;
+      setState(() {
+        _graph = !matches || bounded
+            ? const DayGraph()
+            : dayGraph(
+                raw,
+                hrOverride: selected == null
+                    ? null
+                    : (selected['points'] as List?) ?? const [],
+              );
+        _candidates = candidates;
+        _bounded = bounded;
+        _oldest = selected?['oldest'] as String?;
+        _loading = false;
+      });
+    } catch (_) {
+      if (stillNewest(#heartRate, token)) {
+        setState(() {
+          _loading = false;
+          _failed = true;
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext c) {
+    final l = AppLocalizations.of(c);
+    final title = l?.dayTimelineHeartRateTitle ?? 'Heart rate';
+    return Column(
+      key: const ValueKey('day-heart-rate-history'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(
+          prettyDay(widget.day, l),
+          style: F.cap.copyWith(color: P.of(c).ink2),
+        ),
+        const SizedBox(height: S.x2),
+        if (_candidates.length >= 2) ...[
+          DeviceFilter(
+            options: _candidates,
+            selected: _device,
+            onSelect: (id) {
+              _device = id;
+              _load();
+            },
+          ),
+          const SizedBox(height: S.x2),
+        ],
+        if (_loading)
+          const Center(child: CircularProgressIndicator())
+        else if (_failed)
+          StatusCard(
+            l?.healthCouldNotRead(title) ?? 'Could not read your heart rate',
+            l?.healthReadFailedBody ?? 'The stored rows failed to load.',
+            fix: l?.healthTryAgain ?? 'Try again',
+            onFix: _load,
+            icon: LucideIcons.refreshCw,
+          )
+        else if (_bounded)
+          StatusCard(
+            title,
+            l?.dayTimelineDeviceBounded(_oldest ?? '') ??
+                'Per-device detail is kept for recent days only. Before '
+                    '${_oldest ?? ''} we know which device recorded, not what it said.',
+            icon: LucideIcons.heartPulse,
+          )
+        else if (dayGraphCard(c, _graph, day: widget.day) case final chart?)
+          chart
+        else
+          StatusCard(
+            title,
+            l?.metricDetailSlotNoRecord(prettyDay(widget.day, l)) ??
+                '${prettyDay(widget.day, l)}, no record',
+            icon: LucideIcons.heartPulse,
+          ),
+        const SizedBox(height: S.x3),
+        detailLinkRow(
+          c,
+          LucideIcons.chartGantt,
+          l?.dayTimelineWhatHappenedSection ?? 'What happened',
+          prettyDay(widget.day, l),
+          null,
+          destination: DayTimelineScreen(day: widget.day),
+        ),
+      ],
+    );
+  }
+}
+
 class _StepGoalGauge extends StatefulWidget {
   /// Null when today has not produced a steps value yet — the ring then
   /// shows only the empty track, never a fabricated 0%.
@@ -1792,9 +1984,9 @@ class _StepGoalGaugeState extends State<_StepGoalGauge> {
       return;
     }
     if (typed < 500 || typed > 100000) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content:
-            Text('A step goal of 500–100,000 is a real one. Nothing was saved.'),
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(AppLocalizations.of(context)?.stepGoalInvalid ??
+            'A step goal of 500–100,000 is a real one. Nothing was saved.'),
       ));
       return;
     }
@@ -1837,28 +2029,28 @@ class _StepGoalGaugeState extends State<_StepGoalGauge> {
                   Expanded(
                     child: OsTextField(
                         controller: _ctrl,
-                        label: 'Goal',
+                        label: AppLocalizations.of(c)?.goalLabel ?? 'Goal',
                         keyboard: TextInputType.number),
                   ),
                   const SizedBox(width: S.x2),
                   Pressable(
-                    semanticLabel: 'Save step goal',
+                    semanticLabel: AppLocalizations.of(c)?.stepGoalSave ?? 'Save step goal',
                     onTap: _save,
                     child: Icon(LucideIcons.check, size: 20, color: p.ink),
                   ),
                 ])
               : Pressable(
-                  semanticLabel: 'Edit daily step goal',
+                  semanticLabel: AppLocalizations.of(c)?.stepGoalEdit ?? 'Edit daily step goal',
                   onTap: () => setState(() => _editing = true),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(children: [
-                        Text('Goal', style: F.over.copyWith(color: p.ink3)),
+                        Text(AppLocalizations.of(c)?.goalLabel ?? 'Goal', style: F.over.copyWith(color: p.ink3)),
                         const SizedBox(width: S.x1),
                         Icon(LucideIcons.pencil, size: 12, color: p.ink3),
                       ]),
-                      Text('${thousands(widget.goal)} steps',
+                      Text(AppLocalizations.of(c)?.stepGoalCount(displayNumber(widget.goal, AppLocalizations.of(c))) ?? '${thousands(widget.goal)} steps',
                           style: F.body.copyWith(color: p.ink)),
                     ],
                   ),
@@ -1923,8 +2115,8 @@ String? pickDay(List<String> days, String? want, [String? prefer]) {
 
 /// 'Today' when it is, otherwise the day itself. Never "N days ago" — a
 /// control you steer with needs the name of the place, not the distance to it.
-String dayNavLabel(String? day) =>
-    (_dayBehind(day) ?? 1) <= 0 ? 'Today' : prettyDay(day);
+String dayNavLabel(String? day, [AppLocalizations? l]) =>
+    (_dayBehind(day) ?? 1) <= 0 ? (l?.metricDetailToday ?? 'Today') : prettyDay(day, l);
 
 int? _dayBehind(String? dayId) {
   final d = dayId == null ? null : DateTime.tryParse(dayId);
@@ -1990,7 +2182,7 @@ class DayNav extends StatelessWidget {
         );
 
     return Container(
-      decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+      decoration: BoxDecoration(color: p.card2, borderRadius: R.controlOf(c)),
       child: Row(children: [
         arrow(LucideIcons.chevronLeft, l?.metricDetailPreviousDay ?? 'Previous day',
             older),
@@ -1998,12 +2190,12 @@ class DayNav extends StatelessWidget {
           child: Pressable(
             onTap: () async {
               final picked = await chooseDay(c, days, day);
-              if (picked != null && picked != day) onDay(picked);
+              if (c.mounted && picked != null && picked != day) onDay(picked);
             },
-            semanticLabel: l?.metricDetailChooseDayShowing(dayNavLabel(day)) ??
+            semanticLabel: l?.metricDetailChooseDayShowing(dayNavLabel(day, l)) ??
                 'Choose a day. Showing ${dayNavLabel(day)}',
             child: Text(
-              dayNavLabel(day),
+              dayNavLabel(day, l),
               textAlign: TextAlign.center,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -2032,14 +2224,18 @@ List<Widget> dayNavRow(
 /// card, and a metric screen that grows a second loud card stops having a
 /// headline.
 Widget detailLinkRow(BuildContext c, IconData icon, String title, String sub,
-    VoidCallback onTap) {
+    VoidCallback? onTap, {Widget? destination,
+    Future<void> Function(DetailOpener)? onNavigate}) {
   final p = P.of(c);
-  return Pressable(
-    onTap: onTap,
+  Widget press(VoidCallback? tap) => Pressable(
+    onTap: tap,
     semanticLabel: '$title: $sub',
     child: Container(
       padding: const EdgeInsets.all(S.x4),
-      decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
+      decoration: BoxDecoration(
+        color: p.card2,
+        borderRadius: p.expressive ? R.rXxl : R.rMd,
+      ),
       child: Row(children: [
         Icon(icon, size: 17, color: p.ink3),
         const SizedBox(width: S.x3),
@@ -2054,6 +2250,17 @@ Widget detailLinkRow(BuildContext c, IconData icon, String title, String sub,
       ]),
     ),
   );
+  return destination == null && onNavigate == null
+      ? press(onTap)
+      : DetailLink(color: p.card2,
+          radius: p.expressive ? R.rXxl : R.rMd,
+          builder: (open) => press(() {
+            if (onNavigate != null) {
+              onNavigate(open);
+            } else {
+              open<void>(destination!);
+            }
+          }));
 }
 
 /// The door into density 3 — the screen the user sees as "Nerd stats". Kept
@@ -2063,7 +2270,7 @@ Widget detailLinkRow(BuildContext c, IconData icon, String title, String sub,
 ///
 /// The identifier stays `investigateRow` to match `investigate.dart` and the
 /// `investigate_row` gallery key; only the string changed.
-Widget investigateRow(BuildContext c, VoidCallback onTap) => detailLinkRow(
+Widget investigateRow(BuildContext c, VoidCallback? onTap, {Widget? destination}) => detailLinkRow(
     c,
     LucideIcons.cpu,
     AppLocalizations.of(c)?.metricDetailNerdStatsTitle ?? 'Nerd stats',
@@ -2072,7 +2279,7 @@ Widget investigateRow(BuildContext c, VoidCallback onTap) => detailLinkRow(
     // a copy change — keep it at or under the old string's length.
     AppLocalizations.of(c)?.metricDetailNerdStatsSub ??
         'The figures behind the picture',
-    onTap);
+    onTap, destination: destination);
 
 /// A two-column legend. Used by the hypnogram and the overnight stack.
 class Legend extends StatelessWidget {

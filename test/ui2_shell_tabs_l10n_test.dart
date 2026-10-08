@@ -21,13 +21,14 @@ void main() {
     await _pump(tester, const Locale('de'));
     await tester.pumpAndSettle();
     for (final de in [
-      'Start', 'Gesundheit', 'Ernährung', 'Training', 'Wohlbefinden',
+      'Start', 'Gesundheit', 'Training', 'Wohlbefinden',
     ]) {
       expect(find.text(de), findsOneWidget);
       expect(find.bySemanticsLabel(RegExp('^${RegExp.escape(de)}')),
           findsWidgets);
     }
     expect(find.text('Nutrition'), findsNothing);
+    expect(find.text('Ernährung'), findsNothing);
     expect(find.text('Wellness'), findsNothing);
     expect(find.bySemanticsLabel(RegExp('Nutrition|Wellness')), findsNothing);
     semantics.dispose();
@@ -38,8 +39,8 @@ void main() {
       await _pump(tester, locale);
       await tester.pumpAndSettle();
       final c = tester.element(find.byType(AppShell));
-      final labels = ShellDomain.values.map((d) => d.title(c)).toList();
-      expect(labels.toSet().length, ShellDomain.values.length,
+      final labels = visibleShellDomains.map((d) => d.title(c)).toList();
+      expect(labels.toSet().length, visibleShellDomains.length,
           reason: '$locale: $labels');
     }
   });

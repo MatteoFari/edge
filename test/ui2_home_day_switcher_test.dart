@@ -106,7 +106,7 @@ void main() {
     expect(find.text('70'), findsOneWidget);
   });
 
-  testWidgets('on a past day the day breakdown opens THAT day', (t) async {
+  testWidgets('on a past day the heart-rate view opens THAT day', (t) async {
     final app = AppState.forTesting();
     addTearDown(app.dispose);
     app.repo = _Repo();
@@ -128,13 +128,15 @@ void main() {
     await t.tap(find.bySemanticsLabel('Previous day'));
     await _settle(t);
 
-    final row = find.text('Breakdown of your day');
+    expect(find.text('Breakdown of your day'), findsNothing);
+    final row = find.text('Heart rate');
     await t.scrollUntilVisible(row, 300,
         scrollable: find.byType(Scrollable).first);
     await t.tap(row);
     await _settle(t);
-    expect(t.widget<DayTimelineScreen>(find.byType(DayTimelineScreen)).day,
-        _yesterday);
+    final detail = t.widget<MetricDetail>(find.byType(MetricDetail));
+    expect(detail.metricKey, 'resting_hr');
+    expect(detail.day, _yesterday);
   });
 
   testWidgets('back on today the sleep ring opens the held-over night',

@@ -41,6 +41,7 @@ import '../data/coverage_resolver.dart';
 import '../data/db.dart';
 import '../data/day_label.dart';
 import '../data/series_codec.dart';
+import '../data/sleep_plan_reference.dart';
 import '../notify/fired_keys.dart';
 import '../notify/notification_center.dart';
 import '../notify/notification_event.dart';
@@ -1203,7 +1204,7 @@ import 'vendor_sleep.dart';
 //
 // RULINGS, unchanged and re-checked: protocol sealed, not read, not edited.
 // The gen4 skin-temp channel stays. SpO2 still refuses on every day of every
-// DB. `_crossDayWindow` is still 90. Water is still a reminder.
+// DB. `LocalDb.sleepPlanInputWindow` is still 90. Water is still a reminder.
 //
 // STALE IN THIS FILE, not fixed here because it is another owner's diff: the
 // comments at :4377, :4425, :5023 and the header block at :637-666 all still
@@ -1780,7 +1781,14 @@ import 'vendor_sleep.dart';
 // 106 → 107: analytics main @ c0effea, #86 rmssd gate refuses noise windows, so the stored rmssd/hrv can go null or move.
 // 107 → 108: a ring's own hypnogram stages the main sleep (`vendor_staged`, above auto, below the user's override) when it passes the plausibility gate. Edge-only.
 // 108 → 109: analytics main @ 27b0ba4, #87: at low resting hr a breathing line that stays steady in Hz across the night lets rmssd publish (floor confidence) where the jitter gate refused it.
-const int kAlgoVersion = 109;
+// 109 → 110: opt-in personal-fork respiratory experiment, ported from the
+// frozen 2026-10-05 prototype in analytics. Uses reported record anchors and
+// fixed sleep windows; persists resp_rate_experimental separately. Standard
+// readiness/respiration history, alerts and health export remain unchanged.
+// 110 → 111 (Edge-only): sleep performance compares a completed night with
+// its prospective saved target, not the next sleep's changing recommendation.
+// Missing/partial nights abstain. The new analytics estimator remains unshipped.
+const int kAlgoVersion = 111;
 /// The sibling SHAs this version was derived against, asserted against
 /// pubspec.yaml in test/db_serve_version_and_reads_test.dart.
 ///
@@ -1961,7 +1969,7 @@ const int kAlgoVersion = 109;
 // SleepSegmentation.bandOffsetTrimSec), on OpenStrap/analytics main, for v100
 // above.
 // REPIN @ c0effea: analytics main, #79 + #86 (rmssd gate), for v105.
-const String kAnalyticsPin = '27b0ba486234900084ed791cfb95e71738645d98';
+const String kAnalyticsPin = 'cdec755e4dc12f3b41cbc81eec79d8b3ed7b322d';
 // Repinned to analytics main's tip, which carries BOTH PR #72 (hrv_freq
 // Welch gap guard) and PR #73 (overreachingConjunction rhr quantum guard) —
 // the two independent kAlgoVersion bumps above (93 and 94). Verified both
@@ -2036,7 +2044,7 @@ const int _baselineWindowDays = 28;
 /// uses, anchored at wake+margin rather than wake+48 h. Conservative but still
 /// reached within the first post-wake sync in practice; raise it to trade a
 /// slightly later freeze for more safety margin.
-const int _headlineFreezeMarginSec = 60 * 60;
+const int _headlineFreezeMarginSec = sleepPlanSettlingMarginSec;
 
 /// How long after a night's wake we stop waiting for the data edge to pass
 /// it. A strap that went quiet right after waking (flat battery, taken off and
@@ -2767,6 +2775,7 @@ class DerivationEngine {
       // clobber a good manual result with an empty re-derive once raw is pruned.)
       final overrideDays = {
         ...await LocalDb.sleepOverrideDays(),
+        ...await LocalDb.pendingSleepPlanOverrideDays(),
         // A nap edit on a finalized day has to take effect too — same reason.
         ...await LocalDb.napEditDays(),
       };
@@ -2821,6 +2830,7 @@ class DerivationEngine {
         activeDays.add(dayId);
         _diag['active_days'] = activeDays.toList();
         try {
+          final preparation = await LocalDb.sleepPlanPreparation(dayId);
           final prepared = await _prepareTargetDay(dayId);
           // Override day whose raw has been pruned (≥14 d): re-deriving would
           // produce an empty/absent result and clobber the user's manual sleep.
@@ -2831,7 +2841,9 @@ class DerivationEngine {
             _log('derive day $dayId skipped: override day, raw pruned — kept');
           } else if (prepared != null) {
             _diag['prepared_days'] = (_diag['prepared_days'] as int) + 1;
-            await _derivePreparedDay(prepared, profile, dataNowSec, history);
+            await _derivePreparedDay(prepared, profile, dataNowSec, history,
+                sleepPlanOverrideRevision: preparation.revision,
+                sleepPlanOverrideStamp: preparation.overrideStamp);
             done++;
             _diag['done_days'] = done;
           } else {
@@ -3029,10 +3041,13 @@ class DerivationEngine {
         activeDays.add(dayId);
         _diag['active_days'] = activeDays.toList();
         try {
+          final preparation = await LocalDb.sleepPlanPreparation(dayId);
           final prepared = await _prepareTargetDay(dayId);
           if (prepared != null) {
             _diag['prepared_days'] = (_diag['prepared_days'] as int) + 1;
-            await _derivePreparedDay(prepared, profile, dataNowSec, history);
+            await _derivePreparedDay(prepared, profile, dataNowSec, history,
+                sleepPlanOverrideRevision: preparation.revision,
+                sleepPlanOverrideStamp: preparation.overrideStamp);
             done++;
             _diag['done_days'] = done;
           } else {
@@ -4155,9 +4170,12 @@ class DerivationEngine {
 
       Future<void> processDay(String dayId) async {
         try {
+          final preparation = await LocalDb.sleepPlanPreparation(dayId);
           final prepared = await _prepareTargetDay(dayId);
           if (prepared != null) {
-            await _derivePreparedDay(prepared, profile, dataNowSec, history);
+            await _derivePreparedDay(prepared, profile, dataNowSec, history,
+                sleepPlanOverrideRevision: preparation.revision,
+                sleepPlanOverrideStamp: preparation.overrideStamp);
             done++;
           }
         } catch (e) {
@@ -4362,16 +4380,29 @@ class DerivationEngine {
   /// Durable review jobs outlive a busy derive or a terminated process.
   Future<bool> refreshActivityReviews(Profile profile) async {
     if (_running) return false;
+    // A single bounded batch; AppState already backs off and retries this path
+    // on startup/resume. No BLE pairing is needed to use retained local data.
+    try {
+      final pending = (await LocalDb.pendingSleepPlanOverrideDays()).toList()..sort((a, b) => b.compareTo(a));
+      if (pending.isNotEmpty) {
+        await runDays(profile, pending.take(8).toSet(), force: true);
+      }
+    } catch (e) {
+      _log('sleep-plan refresh remains pending: $e');
+      return false;
+    }
+    if (_running) return false;
     _running = true;
     try {
       final revisions = await LocalDb.applyPendingActivityReviews();
-      if (revisions.isEmpty) return true;
+      if (revisions.isEmpty && !await LocalDb.sleepPlanRefreshPending()) return true;
       // Rebuild from the accepted day rows, including when an input artifact
       // was already cached today. A failed rollup must leave the work durable.
       if (!await _runCrossDay(profile)) return false;
       await LocalDb.refreshComputeFreshness();
       await LocalDb.finishActivityReviews(revisions);
-      return (await (await LocalDb.instance).query('activity_review_days', limit: 1)).isEmpty;
+      return (await (await LocalDb.instance).query('activity_review_days', limit: 1)).isEmpty &&
+          !await LocalDb.sleepPlanRefreshPending();
     } finally {
       _running = false;
     }
@@ -4457,6 +4488,8 @@ class DerivationEngine {
     _BaselineHistoryCache history, {
     bool forceFinalize = false,
     bool suppliedSubstrate = false,
+    int? sleepPlanOverrideRevision,
+    String? sleepPlanOverrideStamp,
   }) async {
     final daySub = day.daySub;
     final sleepSub = day.sleepSub;
@@ -5036,8 +5069,24 @@ class DerivationEngine {
     final scalars =
         (bundle['scalars'] as Map?)?.cast<String, dynamic>() ?? const {};
     double? sc(String k) => (scalars[k] as num?)?.toDouble();
-    await LocalDb.putDayResult(
+    final previousNight = _decodeBundle(
+        (await LocalDb.dayResult(day.date))?['payload_json']);
+    final reference = sleepPlanReference(
+        previousNight?['sleep_plan_reference'], day.sleepOnsetSec,
+        nightDay: day.date) ??
+        await LocalDb.sleepTargetBefore(day.sleepOnsetSec, nightDay: day.date);
+    if (reference != null) {
+      bundle['sleep_plan_reference'] = reference;
+    } else {
+      bundle.remove('sleep_plan_reference');
+    }
+    bundle['data_edge_sec'] = dataNowSec;
+    bundle['sleep_plan_complete'] = sleepPlanNightComplete(bundle,
+        partial: effectivePartial);
+    final published = await LocalDb.putDayResult(
       dayId: day.date,
+      sleepPlanOverrideRevision: sleepPlanOverrideRevision,
+      sleepPlanOverrideStamp: sleepPlanOverrideStamp,
       algoVersion: kAlgoVersion,
       // The data edge this row was derived against. The cross-day settled
       // test compares the row's wake with THIS edge, not a fresher one read
@@ -5083,6 +5132,7 @@ class DerivationEngine {
         'readiness': sc('readiness'),
         'ln_rmssd': sc('ln_rmssd'),
         'resp_rate': sc('resp_rate'),
+        'resp_rate_experimental': sc('resp_rate_experimental'),
         'skin_temp_z': sc('skin_temp_z'),
         // RAW nightly ADC mean — the baseline series for skin_temp_z. Written
         // EVERY day (even during the bootstrap window where skin_temp_z is null)
@@ -5162,6 +5212,10 @@ class DerivationEngine {
         'hr_ceiling_bpm': sc('hr_ceiling_bpm'),
       },
     );
+    if (!published) {
+      _log('derive ${day.date}: newer sleep correction — kept its result and pending refresh');
+      return;
+    }
     // NOTE: the sweep's `history` snapshot is deliberately NOT updated here.
     // See _BaselineHistoryCache — mutating the shared snapshot mid-sweep is the
     // duplicate-day pollution bug, and each day already derives its own
@@ -5571,7 +5625,6 @@ class DerivationEngine {
   // ── cross-day rollup ─────────────────────────────────────────────────────────
 
   static const Duration _crossDayTimeout = Duration(seconds: 30);
-  static const int _crossDayWindow = 90;
 
   /// Whether a persisted `crossday_input` artifact may be reused AS-IS today.
   ///
@@ -5608,10 +5661,14 @@ class DerivationEngine {
 
   Future<bool> _runCrossDay(Profile profile) async {
     try {
-      final reviewRevision = await LocalDb.activityReviewRevision();
-      final days = await _crossDayInputDays();
+      final input = await _crossDayInputDays();
+      final days = input.days;
+      final context = input.context;
+      final reviewRevision = context['review_revision'] as int;
       if (days.length < 3) {
         _log('crossday: only ${days.length} usable day(s) — skip');
+        if (!await LocalDb.sleepPlanContextCurrent(context)) return false;
+        await LocalDb.finishSleepPlanRefresh(context);
         return true;
       }
       final profileMap = profile.toMap();
@@ -5639,7 +5696,7 @@ class DerivationEngine {
       // PREVIOUS version's answers with nothing on screen to say so. Same
       // defect as `crossDayArtifactUsableToday` guards on the INPUT artifact,
       // one layer up on the output.
-      final builtForDay = LocalDb.localDayLabelNow();
+      final builtForDay = context['local_day'] as String;
       final builtAtEpoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final (bundleJson, dropped) = await _runIsolateCancellable(
         () {
@@ -5652,7 +5709,8 @@ class DerivationEngine {
                 )
                 ..['algo_version'] = kAlgoVersion
                 ..['built_for_day'] = builtForDay
-                ..['built_at_epoch'] = builtAtEpoch;
+                ..['built_at_epoch'] = builtAtEpoch
+                ..['sleep_plan_context'] = context;
           // Encode-safety BEFORE jsonEncode, never a try/catch around it: one
           // non-finite leaf must cost that leaf, not the whole artifact.
           final paths = <String>[];
@@ -5663,8 +5721,9 @@ class DerivationEngine {
         _crossDayTimeout,
         label: 'crossday',
       );
-      if (!await LocalDb.putReviewedBaseline('crossday', bundleJson, reviewRevision)) {
-        _log('crossday: newer activity review; leaving its refresh queued');
+      if (!await LocalDb.putReviewedBaseline('crossday', bundleJson, reviewRevision,
+          sleepPlanContext: context)) {
+        _log('crossday: changed sleep inputs/context; leaving its refresh queued');
         return false;
       }
       if (dropped.isNotEmpty) {
@@ -5676,12 +5735,11 @@ class DerivationEngine {
       _log('crossday: stored over ${days.length} day(s)');
       return true;
     } catch (e, st) {
-      // NOT a debug line. A failure here means the stored bundle is now STALE
-      // — the reader's version/day stamp will reject it and the whole
-      // cross-day family goes absent — so it has to be visible in a release
-      // build, with the stack, or the cause is unrecoverable after the fact.
+      // Keep failures visible in release builds. The prior bundle is retained;
+      // readers withhold its sleep plan when the source context changed while
+      // other families retain their existing version/age policy.
       debugPrint('[derive] crossday BUNDLE DROPPED — the stored artifact is '
-          'now stale and every cross-day metric will read absent: $e\n$st');
+          'retained; sleep-plan context will be checked on read: $e\n$st');
       _log('crossday FAILED/skipped: $e');
       return false;
     }
@@ -5724,8 +5782,7 @@ class DerivationEngine {
     return out;
   }
 
-  Future<List<Map<String, dynamic>>> _crossDayInputDays() async {
-    final reviewRevision = await LocalDb.activityReviewRevision();
+  Future<({List<Map<String, dynamic>> days, Map<String, dynamic> context})> _crossDayInputDays() async {
     final artifact = await LocalDb.baseline('crossday_input');
     final raw = artifact?['payload_json'];
     if (raw is String && raw.isNotEmpty) {
@@ -5736,12 +5793,13 @@ class DerivationEngine {
         // day makes `_todayNum` read yesterday's strain and nap minutes as
         // today's (§3.3). See [crossDayArtifactUsableToday].
         if (crossDayArtifactUsableToday(decoded, LocalDb.localDayLabelNow()) &&
-            (decoded as Map)['review_revision'] == reviewRevision) {
+            await LocalDb.sleepPlanContextCurrent((decoded as Map)['source_context'])) {
           final rows = decoded['days'] as List;
-          return [
+          return (days: [
             for (final row in rows)
               if (row is Map) row.cast<String, dynamic>(),
-          ];
+          ], context: {...Map<String, dynamic>.from(decoded['source_context'] as Map),
+            'input_updated_at': artifact!['updated_at']});
         }
       } catch (_) {
         // Fall through to rebuild from day_result.
@@ -5750,17 +5808,19 @@ class DerivationEngine {
     return _refreshCrossDayInputArtifact();
   }
 
-  Future<List<Map<String, dynamic>>> _refreshCrossDayInputArtifact() async {
+  Future<({List<Map<String, dynamic>> days, Map<String, dynamic> context})> _refreshCrossDayInputArtifact() async {
     // The DB read itself must stay on the main isolate (sqflite), but
-    // decoding up to _crossDayWindow (90) full day payloads + re-encoding
+    // decoding up to LocalDb.sleepPlanInputWindow (90) full day payloads + re-encoding
     // them was previously ALL synchronous main-isolate work with zero
     // offloading — this is the confirmed source of the ~3.5-4.7s production
     // hang (Crashlytics jank_watchdog), since _refreshBaselines calls this
     // unconditionally on every heavy pass. _decodeBundle/_crossDayRecord are
     // both static, so this whole transform+encode step is isolate-safe.
-    final reviewRevision = await LocalDb.activityReviewRevision();
-    final rows = await LocalDb.recentDayResults(_crossDayWindow);
-    final today = LocalDb.localDayLabelNow();
+    final snapshot = await LocalDb.sleepPlanInputSnapshot();
+    final rows = snapshot.rows;
+    final context = snapshot.context;
+    final reviewRevision = context['review_revision'] as int;
+    final today = context['local_day'] as String;
     final imported = await LocalDb.importedDates();
     final (days, json) = await _runIsolateCancellable(() {
       final days = <Map<String, dynamic>>[];
@@ -5785,12 +5845,18 @@ class DerivationEngine {
           'algo_version': kAlgoVersion,
           'built_for_day': today,
           'review_revision': reviewRevision,
+          'source_context': context,
           'days': days,
         })
       );
     }, _crossDayTimeout, label: 'crossday-input');
-    await LocalDb.putReviewedBaseline('crossday_input', json, reviewRevision);
-    return days;
+    if (!await LocalDb.putReviewedBaseline('crossday_input', json, reviewRevision,
+        sleepPlanContext: context)) {
+      throw StateError('Sleep-plan inputs changed while preparing crossday input');
+    }
+    final stored = await LocalDb.baseline('crossday_input');
+    if (stored?['payload_json'] != json) throw StateError('Crossday input replaced before calculation');
+    return (days: days, context: {...context, 'input_updated_at': stored!['updated_at']});
   }
 
   // ── notifications generator ─────────────────────────────────────────────────
@@ -6086,6 +6152,13 @@ class DerivationEngine {
       'sleep_coverage': (inBedSec == null || inBedSec <= 0 || observedSec == null)
           ? null
           : observedSec / inBedSec,
+      'sleep_plan_reference': payload['sleep_plan_reference'],
+      'sleep_episode_settled': (row['partial'] as num?) == 0 &&
+          onsetMs != null && offsetMs != null && offsetMs > onsetMs &&
+          payload['data_edge_sec'] is num &&
+          (payload['data_edge_sec'] as num) >= offsetMs / 1000 + _headlineFreezeMarginSec,
+      'sleep_complete': payload['sleep_plan_complete'] == true &&
+          (row['partial'] as num?) == 0,
       'hypnogram': series?['hypnogram'],
       // 24 local-hour means of this day's HR curve — the ONLY intraday series
       // that survives long enough to support cross-day circadian analysis.

@@ -15,6 +15,7 @@
 // Neither path is exercised by anything a user does, which is exactly why they
 // both shipped broken.
 
+import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -24,6 +25,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:openstrap_edge/data/db.dart';
+import 'package:openstrap_edge/coach/coach_store.dart';
 import 'package:openstrap_edge/state/app_state.dart';
 import 'package:openstrap_edge/ui2/screens/home_screen.dart' show dbRebuiltCard;
 
@@ -232,6 +234,37 @@ void main() {
     /// Values are distinctive so a merge that silently substituted a default
     /// would fail on the value, not just the count.
     Future<void> seedOneOfEverything(Database db) async {
+      final coach = CoachStore(db, 'local');
+      await coach.save({
+        'id': 'recovered-coach',
+        'title': 'Evening routine',
+        'created_ms': 1,
+        'updated_ms': 2,
+        'preview': 'A saved reply',
+        'search_text': 'Evening routine\nA saved reply\nKeep my draft',
+        'history_json': '[{"role":"user","content":"An evening routine"}]',
+        'transcript_json': '[{"kind":"assistant","text":"A saved reply"}]',
+        'draft': 'Keep my draft',
+        'scroll_offset': 42.5,
+        'retry_json': jsonEncode({
+          'receipts': {'set_step_goal:{"goal":9000}': 'Goal saved'},
+        }),
+      });
+      await coach.savePreferences(
+        const CoachPreferences(
+          focus: 'recovery',
+          replyLength: 'brief',
+          customInstructions: 'Use plain language',
+          memoryEnabled: true,
+        ),
+      );
+      await coach.saveMemory('I prefer short evening walks', id: 'memory1');
+      await db.insert('coach_legacy', {
+        'owner': 'local',
+        'filename': 'coach_s_local_unverified.json',
+        'raw_json': '{broken',
+        'error': 'corrupt source retained',
+      });
       await db.insert('journal', {
         'date': '2026-08-01',
         'tags_json': '["caffeine"]',
@@ -324,6 +357,10 @@ void main() {
     /// Every table `seedOneOfEverything` writes, i.e. the salvage promise as a
     /// user reads it: hand-typed, derived-once, and the retention window.
     const salvaged = [
+      'coach_legacy',
+      'coach_chat',
+      'coach_preferences',
+      'coach_memory',
       'journal',
       'lab_result',
       'food_entry',
@@ -384,7 +421,28 @@ void main() {
           'slept badly, three coffees');
       expect((await db.query('lab_result')).first['value'], 63.5);
       expect((await db.query('decoded_rr')).first['rr_ms'], 1042);
-      // `_days` is the importer's bookkeeping key, not a table: it must never
+      final coach = CoachStore(db, 'local');
+        final recoveredChat = await coach.read('recovered-coach');
+        expect(recoveredChat!['title'], 'Evening routine');
+        expect(recoveredChat['draft'], 'Keep my draft');
+        expect(recoveredChat['scroll_offset'], 42.5);
+        expect(jsonDecode(recoveredChat['transcript_json'] as String), [
+          {'kind': 'assistant', 'text': 'A saved reply'},
+        ]);
+        expect(jsonDecode(recoveredChat['retry_json'] as String), {
+          'receipts': {'set_step_goal:{"goal":9000}': 'Goal saved'},
+        });
+        final preferences = await coach.preferences();
+        expect(preferences.focus, 'recovery');
+        expect(preferences.replyLength, 'brief');
+        expect(preferences.customInstructions, 'Use plain language');
+        expect(preferences.memoryEnabled, true);
+        expect(
+          (await coach.memories()).single.text,
+          'I prefer short evening walks',
+        );
+        expect((await db.query('coach_legacy')).single['raw_json'], '{broken');
+        // `_days` is the importer's bookkeeping key, not a table: it must never
       // reach the rebuild card, which prints this map verbatim.
       expect(r.salvaged.containsKey('_days'), isFalse);
       expect((await LocalDb.schemaHealth())['ok'], isTrue);

@@ -281,7 +281,7 @@ class _BeatsState extends State<Beats> {
           _rhythm(c, d),
           const SizedBox(height: S.x5),
           investigateRow(c,
-              () => go(c, Investigate('hrv', day: _day ?? d.day))),
+              null, destination: Investigate('hrv', day: _day ?? d.day)),
         ],
       ],
       // WHICH NIGHT, in the app's one day format. Every panel below describes
@@ -323,10 +323,10 @@ class _BeatsState extends State<Beats> {
               // 0 ms" is a fabricated measurement, and 0 is the one value that
               // reads as a finding.
               '${sd1 == null || sd2 == null ? '' : (l?.beatsBeatsGoneMeasured(
-                      metricValue('ms', sd1), metricValue('ms', sd2)) ??
+                      metricValue('ms', sd1, l), metricValue('ms', sd2, l)) ??
                   ' — this night measured '
-                      'SD1 ${metricValue('ms', sd1)} ms, '
-                      'SD2 ${metricValue('ms', sd2)} ms')}.',
+                      'SD1 ${metricValue('ms', sd1, l)} ms, '
+                      'SD2 ${metricValue('ms', sd2, l)} ms')}.',
           icon: LucideIcons.scatterChart,
         ),
       );
@@ -360,10 +360,10 @@ class _BeatsState extends State<Beats> {
           const SizedBox(height: S.x4),
           InlineMetrics([
             if (sd1 != null)
-              (l?.beatsSd1Label ?? 'SD1', '${metricValue('ms', sd1)} ms',
+              (l?.beatsSd1Label ?? 'SD1', '${metricValue('ms', sd1, l)} ms',
                   C.green),
             if (sd2 != null)
-              (l?.beatsSd2Label ?? 'SD2', '${metricValue('ms', sd2)} ms',
+              (l?.beatsSd2Label ?? 'SD2', '${metricValue('ms', sd2, l)} ms',
                   C.green),
             (l?.beatsIntervalsLabel ?? 'Intervals', thousands(d.nn.length),
                 C.green),
@@ -406,6 +406,7 @@ class _BeatsState extends State<Beats> {
         StatusCard.forMetric(
                 l?.beatsVariabilitySection ?? 'Variability across the night',
                 d.shape,
+                l: l,
                 unit: l?.beatsUnitNights ?? 'nights',
                 why: l?.beatsVariabilityWhy ??
                     'No half-hour bin of this night held enough clean beats '
@@ -453,9 +454,9 @@ class _BeatsState extends State<Beats> {
             const SizedBox(height: S.x4),
             InlineMetrics([
               (l?.beatsFirstThird ?? 'First third',
-                  '${metricValue('ms', d.firstThirdMs!)} ms', C.green),
+                  '${metricValue('ms', d.firstThirdMs!, l)} ms', C.green),
               (l?.beatsLastThird ?? 'Last third',
-                  '${metricValue('ms', d.lastThirdMs!)} ms', C.green),
+                  '${metricValue('ms', d.lastThirdMs!, l)} ms', C.green),
             ]),
           ],
           // The estimator's own note is NOT rendered here. A present
@@ -491,6 +492,7 @@ class _BeatsState extends State<Beats> {
         StatusCard.forMetric(
                 l?.beatsDcSection ?? 'Deceleration capacity', d.dc,
                 unit: l?.beatsUnitNights ?? 'nights',
+                l: l,
                 why: l?.beatsDcWhy ??
                     'No stored night has produced one yet.') ??
             StatusCard(l?.beatsDcSection ?? 'Deceleration capacity',

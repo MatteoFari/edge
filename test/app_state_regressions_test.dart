@@ -72,25 +72,33 @@ void main() {
     });
 
     test('a pairing with no serial yet gets one', () {
-      expect(healedPairing(PairedDevice('r-1', null), '4C2248092')?.serial,
-          '4C2248092');
+      expect(
+        healedPairing(PairedDevice('r-1', null), '4C2248092')?.serial,
+        '4C2248092',
+      );
     });
 
-    test('no change when the serial already matches, or the report is junk',
-        () {
-      expect(healedPairing(PairedDevice('r-1', '4C2248092'), '4C2248092'),
-          isNull);
-      expect(healedPairing(PairedDevice('r-1', '4C2248092'), '?*?*'), isNull);
-      expect(healedPairing(PairedDevice('r-1', '4C2248092'), null), isNull);
-      expect(healedPairing(PairedDevice('r-1', '4C2248092'), '   '), isNull);
-    });
+    test(
+      'no change when the serial already matches, or the report is junk',
+      () {
+        expect(
+          healedPairing(PairedDevice('r-1', '4C2248092'), '4C2248092'),
+          isNull,
+        );
+        expect(healedPairing(PairedDevice('r-1', '4C2248092'), '?*?*'), isNull);
+        expect(healedPairing(PairedDevice('r-1', '4C2248092'), null), isNull);
+        expect(healedPairing(PairedDevice('r-1', '4C2248092'), '   '), isNull);
+      },
+    );
 
-    test('the remoteId is never invented — it always comes from the pairing',
-        () {
-      // Even with a clean serial, an empty remoteId means there is nothing
-      // legitimate to write back.
-      expect(healedPairing(PairedDevice('', null), '4C2248092'), isNull);
-    });
+    test(
+      'the remoteId is never invented — it always comes from the pairing',
+      () {
+        // Even with a clean serial, an empty remoteId means there is nothing
+        // legitimate to write back.
+        expect(healedPairing(PairedDevice('', null), '4C2248092'), isNull);
+      },
+    );
   });
 
   // ── 5. (removed) the step-calibration live-consumer latch ─────────────────
@@ -101,8 +109,7 @@ void main() {
 
   // ── 6. `busy` must not latch true forever ──────────────────────────────────
   group('openSession (busy latch)', () {
-    test('unpairing while the session is opening does not wedge busy',
-        () async {
+    test('unpairing while the session is opening does not wedge busy', () async {
       final app = AppState.forTesting();
       addTearDown(app.dispose);
       app.paired = PairedDevice('r-1', '4C2248092');
@@ -126,6 +133,8 @@ void main() {
 
   // ── 6b. "Sync the band" on a link that is already up ───────────────────────
   group('syncNow (already connected)', () {
+    setUp(() async => (await LocalDb.instance).delete('compute_jobs'));
+
     test('asks the band for an offload instead of reusing the link', () async {
       final engine = _ConnectedEngine();
       final app = AppState.forTesting(engine: engine);
@@ -140,60 +149,103 @@ void main() {
       expect(app.busy, isFalse);
     });
 
-    test('goes through the floored foreground pull, not a manual one',
-        () async {
-      // A manual request is never floored, so quick repeat taps on a band
-      // that just drained each got an empty offload, and three of those
-      // flip the clock-lost status and back the periodic pull off.
-      final engine = _ConnectedEngine();
+    test(
+      'goes through the floored foreground pull, not a manual one',
+      () async {
+        // A manual request is never floored, so quick repeat taps on a band
+        // that just drained each got an empty offload, and three of those
+        // flip the clock-lost status and back the periodic pull off.
+        final engine = _ConnectedEngine();
+        final app = AppState.forTesting(engine: engine);
+        addTearDown(app.dispose);
+        app.paired = PairedDevice('r-1', '4C2248092');
+
+        await app.syncNow();
+        await app.syncNow();
+        await app.syncNow();
+
+        expect(engine.historyRequests, 0);
+        expect(engine.foregroundRequests, 3);
+        expect(engine.syncs, 1);
+        expect(
+          await LocalDb.computeJobs(),
+          isEmpty,
+          reason: 'Empty and floored refreshes must not enqueue processing.',
+        );
+      },
+    );
+
+    test('newly received records still schedule derivation', () async {
+      final engine = _ConnectedEngine(records: 2);
       final app = AppState.forTesting(engine: engine);
       addTearDown(app.dispose);
       app.paired = PairedDevice('r-1', '4C2248092');
 
       await app.syncNow();
-      await app.syncNow();
-      await app.syncNow();
-
-      expect(engine.historyRequests, 0);
-      expect(engine.foregroundRequests, 3);
-      expect(engine.syncs, 1);
+      final jobs = await LocalDb.computeJobs();
+      expect(jobs.map((job) => job['type']), contains('derive_heavy'));
     });
+
+    test(
+      'failed refresh does not enqueue new work or delete existing jobs',
+      () async {
+        await LocalDb.enqueueDeriveJob(
+          type: 'derive_light',
+          reason: 'stored_data',
+        );
+        final before = await LocalDb.computeJobs();
+        final engine = _ConnectedEngine(fails: true);
+        final app = AppState.forTesting(engine: engine);
+        addTearDown(app.dispose);
+        app.paired = PairedDevice('r-1', '4C2248092');
+
+        await app.syncNow();
+        final after = await LocalDb.computeJobs();
+        expect(after, before);
+      },
+    );
   });
 
   // ── 7. the orphan-workout reconcile must not clobber a live workout ────────
   group('_reconcileOrphanedLiveWorkout (startWorkout race)', () {
-    test('a workout started inside the DB round-trip is not overwritten',
-        () async {
-      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      await LocalDb.putSession({
-        'id': 'stale-from-a-killed-run',
-        'start_ts': nowSec - 600,
-        'end_ts': null,
-        'type': 'other',
-        'status': 'live',
-        'source': 'manual',
-        'created_at': (nowSec - 600) * 1000,
-      });
+    test(
+      'a workout started inside the DB round-trip is not overwritten',
+      () async {
+        final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        await LocalDb.putSession({
+          'id': 'stale-from-a-killed-run',
+          'start_ts': nowSec - 600,
+          'end_ts': null,
+          'type': 'other',
+          'status': 'live',
+          'source': 'manual',
+          'created_at': (nowSec - 600) * 1000,
+        });
 
-      final app = AppState.forTesting();
-      addTearDown(app.dispose);
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
 
-      // Kicked unawaited from _init(), one line before `initialized = true`
-      // makes the shell interactive — so the user can start a workout inside
-      // the round-trip.
-      final reconcile = app.debugReconcileOrphanedLiveWorkout();
-      app.activeWorkout = LiveWorkoutState(
-        startTime: DateTime.now(),
-        targetKcal: 300,
-        workoutId: 'user-just-started-this',
-        type: 'run',
-      );
-      await reconcile;
+        // Kicked unawaited from _init(), one line before `initialized = true`
+        // makes the shell interactive — so the user can start a workout inside
+        // the round-trip.
+        final reconcile = app.debugReconcileOrphanedLiveWorkout();
+        app.activeWorkout = LiveWorkoutState(
+          startTime: DateTime.now(),
+          targetKcal: 300,
+          workoutId: 'user-just-started-this',
+          type: 'run',
+        );
+        await reconcile;
 
-      expect(app.activeWorkout?.workoutId, 'user-just-started-this',
-          reason: 'the stale row must never replace a genuinely live workout '
-              '(the old timer became unreachable and double-counted at 2 Hz)');
-    });
+        expect(
+          app.activeWorkout?.workoutId,
+          'user-just-started-this',
+          reason:
+              'the stale row must never replace a genuinely live workout '
+              '(the old timer became unreachable and double-counted at 2 Hz)',
+        );
+      },
+    );
 
     test('with nothing live, a recent orphan is still resumed', () async {
       final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -213,30 +265,36 @@ void main() {
       expect(app.activeWorkout?.workoutId, 'resumable');
     });
 
-    test('a resumed session keeps its ceiling, so the idle gate exists',
-        () async {
-      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      await LocalDb.putSession({
-        'id': 'resumable-gated',
-        'start_ts': nowSec - 300,
-        'end_ts': null,
-        'type': 'run',
-        'status': 'live',
-        'source': 'manual',
-        'created_at': (nowSec - 300) * 1000,
-      });
+    test(
+      'a resumed session keeps its ceiling, so the idle gate exists',
+      () async {
+        final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        await LocalDb.putSession({
+          'id': 'resumable-gated',
+          'start_ts': nowSec - 300,
+          'end_ts': null,
+          'type': 'run',
+          'status': 'live',
+          'source': 'manual',
+          'created_at': (nowSec - 300) * 1000,
+        });
 
-      final app = AppState.forTesting();
-      addTearDown(app.dispose);
-      app.user = {'age': 30};
-      await app.debugReconcileOrphanedLiveWorkout();
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        app.user = {'age': 30};
+        await app.debugReconcileOrphanedLiveWorkout();
 
-      expect(app.activeWorkout?.hrMax, closeTo(208.0 - 0.7 * 30, 1e-9),
-          reason: 'without the ceiling the idle gate is null and '
+        expect(
+          app.activeWorkout?.hrMax,
+          closeTo(208.0 - 0.7 * 30, 1e-9),
+          reason:
+              'without the ceiling the idle gate is null and '
               'WorkoutIdleWatch counts any positive reading as active — a '
               'forgotten session sitting at resting HR would never be asked '
-              'about after an app restart, the exact case the watch is for');
-    });
+              'about after an app restart, the exact case the watch is for',
+        );
+      },
+    );
 
     test('a stale (past-ceiling) orphan is finalized locally but NEVER '
         'exported to Health', () async {
@@ -251,9 +309,10 @@ void main() {
             calls.add(call.method);
             return call.method == 'hasPermissions' ? false : true;
           });
-      addTearDown(() => TestDefaultBinaryMessengerBinding
-          .instance.defaultBinaryMessenger
-          .setMockMethodCallHandler(channel, null));
+      addTearDown(
+        () => TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(channel, null),
+      );
       SharedPreferences.setMockInitialValues({kHealthSyncPref: true});
 
       final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -275,87 +334,260 @@ void main() {
       // chance to run before asserting nothing came through.
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
-      expect(calls, isEmpty,
-          reason: 'a stale orphan has a fabricated end_ts and must never '
-              'reach the platform health store');
+      expect(
+        calls,
+        isEmpty,
+        reason:
+            'a stale orphan has a fabricated end_ts and must never '
+            'reach the platform health store',
+      );
       final row = await LocalDb.session(staleId);
       expect(row?['status'], 'done');
       expect(row?['end_ts'], isNotNull);
-      expect(row?['end_ts_fabricated'], 1,
-          reason: 'without this flag the row looks like any other finished '
-              'workout and _writeOneWorkout would export it on the very next '
-              'periodic exportAll pass, minutes later');
-      expect(row?['end_ts'], nowSec - 7 * 60 * 60,
-          reason: 'no tally snapshot = it never ticked; stamping relaunch '
-              'time would bill 7 h of 1 Hz HR to it on re-score');
+      expect(
+        row?['end_ts_fabricated'],
+        1,
+        reason:
+            'without this flag the row looks like any other finished '
+            'workout and _writeOneWorkout would export it on the very next '
+            'periodic exportAll pass, minutes later',
+      );
+      expect(
+        row?['end_ts'],
+        nowSec - 7 * 60 * 60,
+        reason:
+            'no tally snapshot = it never ticked; stamping relaunch '
+            'time would bill 7 h of 1 Hz HR to it on re-score',
+      );
     });
 
-    test('a stale orphan ends at its last tally snapshot, not at relaunch',
-        () async {
-      // Run started 18:00, app killed at 18:40, reopened 13.5 h later. The
-      // re-score bills whatever 1 Hz HR sits in [start_ts, end_ts], so a
-      // relaunch-time end turned the whole night into workout calories.
-      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final startSec = nowSec - 13 * 60 * 60 - 30 * 60;
-      final lastTickSec = startSec + 40 * 60;
-      const id = 'stale-with-tally';
-      await LocalDb.putSession({
-        'id': id,
-        'start_ts': startSec,
-        'end_ts': null,
-        'type': 'run',
-        'status': 'live',
-        'source': 'manual',
-        'created_at': startSec * 1000,
-      });
-      await LocalDb.saveLiveWorkoutTally({
-        'workout_id': id,
-        'updated_ts': lastTickSec * 1000,
-        'per_minute_hr': '[]',
-        'zone_seconds': '[]',
-        'seconds_by_bpm': '{}',
-      });
+    test(
+      'a stale orphan ends at its last tally snapshot, not at relaunch',
+      () async {
+        // Run started 18:00, app killed at 18:40, reopened 13.5 h later. The
+        // re-score bills whatever 1 Hz HR sits in [start_ts, end_ts], so a
+        // relaunch-time end turned the whole night into workout calories.
+        final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        final startSec = nowSec - 13 * 60 * 60 - 30 * 60;
+        final lastTickSec = startSec + 40 * 60;
+        const id = 'stale-with-tally';
+        await LocalDb.putSession({
+          'id': id,
+          'start_ts': startSec,
+          'end_ts': null,
+          'type': 'run',
+          'status': 'live',
+          'source': 'manual',
+          'created_at': startSec * 1000,
+        });
+        await LocalDb.saveLiveWorkoutTally({
+          'workout_id': id,
+          'updated_ts': lastTickSec * 1000,
+          'per_minute_hr': '[]',
+          'zone_seconds': '[]',
+          'seconds_by_bpm': '{}',
+        });
 
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        await app.debugReconcileOrphanedLiveWorkout();
+
+        final row = await LocalDb.session(id);
+        expect(row?['status'], 'done');
+        expect(row?['end_ts'], lastTickSec);
+        expect(row?['end_ts_fabricated'], 1);
+      },
+    );
+
+    test(
+      'a malformed tally snapshot still finalizes the stale orphan',
+      () async {
+        final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+        final startSec = nowSec - 5 * 60 * 60;
+        const id = 'stale-bad-tally';
+        await LocalDb.putSession({
+          'id': id,
+          'start_ts': startSec,
+          'end_ts': null,
+          'type': 'run',
+          'status': 'live',
+          'source': 'manual',
+          'created_at': startSec * 1000,
+        });
+        await LocalDb.saveLiveWorkoutTally({
+          'workout_id': id,
+          'updated_ts': 'garbage',
+          'per_minute_hr': '[]',
+          'zone_seconds': '[]',
+          'seconds_by_bpm': '{}',
+        });
+
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        await app.debugReconcileOrphanedLiveWorkout();
+
+        final row = await LocalDb.session(id);
+        expect(row?['status'], 'done');
+        expect(row?['end_ts'], startSec);
+      },
+    );
+  });
+
+  group('alarm schedule drafts', () {
+    setUp(LocalDb.clearAlarmSchedule);
+    tearDown(LocalDb.clearAlarmSchedule);
+
+    test('Save updates affected days together and arms only once', () async {
+      final engine = _ArmRecordingEngine();
+      final app = AppState.forTesting(engine: engine);
+      addTearDown(app.dispose);
+      await app.setScheduleDay(weekday: 6, hour: 9, minute: 15, enabled: true);
+      final sunday = app.alarmSchedule[6];
+      app.device.connection = 'connected';
+
+      await app.setAlarmScheduleEntries(const [
+        AlarmScheduleEntry(weekday: 0, hour: 7, minute: 30),
+        AlarmScheduleEntry(weekday: 1, hour: 7, minute: 30),
+      ]);
+
+      expect(engine.armed, hasLength(1));
+      expect(app.alarmSchedule[0].hour, 7);
+      expect(app.alarmSchedule[1].minute, 30);
+      expect(app.alarmSchedule[6], sunday);
+      expect(await LocalDb.alarmScheduleRows(), hasLength(3));
+    });
+
+    test('invalid drafts cannot partially save or notify', () async {
       final app = AppState.forTesting();
       addTearDown(app.dispose);
-      await app.debugReconcileOrphanedLiveWorkout();
+      var notifications = 0;
+      app.addListener(() => notifications++);
 
-      final row = await LocalDb.session(id);
-      expect(row?['status'], 'done');
-      expect(row?['end_ts'], lastTickSec);
-      expect(row?['end_ts_fabricated'], 1);
+      await expectLater(
+        app.setAlarmScheduleEntries(const [
+          AlarmScheduleEntry(weekday: 0, hour: 7, minute: 30),
+          AlarmScheduleEntry(weekday: 1, hour: 24, minute: 0),
+        ]),
+        throwsRangeError,
+      );
+      await expectLater(
+        app.setAlarmScheduleEntries(const [
+          AlarmScheduleEntry(weekday: 0, hour: 7, minute: 30),
+          AlarmScheduleEntry(weekday: 0, hour: 8, minute: 0),
+        ]),
+        throwsArgumentError,
+      );
+
+      expect(await LocalDb.alarmScheduleRows(), isEmpty);
+      expect(notifications, 0);
     });
 
-    test('a malformed tally snapshot still finalizes the stale orphan',
-        () async {
-      final nowSec = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-      final startSec = nowSec - 5 * 60 * 60;
-      const id = 'stale-bad-tally';
-      await LocalDb.putSession({
-        'id': id,
-        'start_ts': startSec,
-        'end_ts': null,
-        'type': 'run',
-        'status': 'live',
-        'source': 'manual',
-        'created_at': startSec * 1000,
-      });
-      await LocalDb.saveLiveWorkoutTally({
-        'workout_id': id,
-        'updated_ts': 'garbage',
-        'per_minute_hr': '[]',
-        'zone_seconds': '[]',
-        'seconds_by_bpm': '{}',
-      });
-
+    test('stale drafts cannot overwrite a newly claimed weekday', () async {
       final app = AppState.forTesting();
       addTearDown(app.dispose);
-      await app.debugReconcileOrphanedLiveWorkout();
-
-      final row = await LocalDb.session(id);
-      expect(row?['status'], 'done');
-      expect(row?['end_ts'], startSec);
+      final expected = List<AlarmScheduleEntry>.of(app.alarmSchedule);
+      await app.setScheduleDay(weekday: 1, hour: 9, minute: 0, enabled: true);
+      await expectLater(
+        app.setAlarmScheduleEntries(const [
+          AlarmScheduleEntry(weekday: 0, hour: 7, minute: 30),
+          AlarmScheduleEntry(weekday: 1, hour: 7, minute: 30),
+        ], expected: expected),
+        throwsStateError,
+      );
+      final rows = await LocalDb.alarmScheduleRows();
+      expect(rows, hasLength(1));
+      expect(rows.single['weekday'], 1);
+      expect(rows.single['hour'], 9);
     });
+
+    test(
+      'an off default-time claim also invalidates a stale alarm draft',
+      () async {
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        final expected = List<AlarmScheduleEntry>.of(app.alarmSchedule);
+        expect(expected[1].configured, isFalse);
+        await app.setScheduleDay(weekday: 1, enabled: false);
+        expect(app.alarmSchedule[1].configured, isTrue);
+        await expectLater(
+          app.setAlarmScheduleEntries(const [
+            AlarmScheduleEntry(weekday: 1, hour: 7, minute: 30),
+          ], expected: expected),
+          throwsStateError,
+        );
+        final rows = await LocalDb.alarmScheduleRows();
+        expect(rows.single['hour'], defaultAlarmHour);
+        expect(rows.single['configured'], 1);
+        expect(rows.single['enabled'], 0);
+      },
+    );
+
+    test(
+      'restored alarm schedules immediately replace the cached slots',
+      () async {
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        await app.setScheduleDay(
+          weekday: 0,
+          hour: 7,
+          minute: 0,
+          enabled: false,
+        );
+        final snapshot = p.join(
+          await databaseFactory.getDatabasesPath(),
+          'alarm_restore_state_test.db',
+        );
+        await databaseFactory.deleteDatabase(snapshot);
+        addTearDown(() => databaseFactory.deleteDatabase(snapshot));
+        final db = await LocalDb.instance;
+        await db.execute('VACUUM INTO ?', [snapshot]);
+        await app.setScheduleDay(weekday: 0, hour: 9, minute: 0, enabled: true);
+        await app.importEdgeBackup(snapshot);
+        expect(app.alarmSchedule[0].hour, 7);
+        expect(app.alarmSchedule[0].enabled, isFalse);
+        expect(app.alarmSchedule[0].configured, isTrue);
+      },
+    );
+
+    test(
+      'a failed multi-day save preserves the schedule and band arm',
+      () async {
+        final engine = _ArmRecordingEngine();
+        final app = AppState.forTesting(engine: engine);
+        addTearDown(app.dispose);
+        await app.setScheduleDay(
+          weekday: 0,
+          hour: 6,
+          minute: 15,
+          enabled: true,
+        );
+        final before = List<AlarmScheduleEntry>.of(app.alarmSchedule);
+        app.device.connection = 'connected';
+        final db = await LocalDb.instance;
+        await db.execute('''
+        CREATE TEMP TRIGGER reject_draft BEFORE INSERT ON alarm_schedule
+        WHEN NEW.weekday = 1 BEGIN SELECT RAISE(ABORT, 'failed draft'); END
+      ''');
+        try {
+          await expectLater(
+            app.setAlarmScheduleEntries(const [
+              AlarmScheduleEntry(weekday: 0, hour: 7, minute: 30),
+              AlarmScheduleEntry(weekday: 1, hour: 7, minute: 30),
+            ]),
+            throwsA(isA<DatabaseException>()),
+          );
+
+          expect(app.alarmSchedule, before);
+          final rows = await LocalDb.alarmScheduleRows();
+          expect(rows, hasLength(1));
+          expect(rows.single['hour'], 6);
+          expect(rows.single['minute'], 15);
+          expect(engine.armed, isEmpty);
+        } finally {
+          await db.execute('DROP TRIGGER reject_draft');
+        }
+      },
+    );
   });
 
   // ── 9. a fired alarm must be cleared from state AND prefs ──────────────────
@@ -369,93 +601,109 @@ void main() {
               true;
     }
 
-    test('EXECUTED (event 57) clears the armed alarm and its persisted epoch',
-        () async {
-      SharedPreferences.setMockInitialValues({'alarm_epoch': 1785000000});
-      await silenceOsPresent();
-      final app = AppState.forTesting();
-      addTearDown(app.dispose);
-      app.device.alarmEpoch = 1785000000;
-      expect(app.alarmEpoch, 1785000000);
+    test(
+      'EXECUTED (event 57) clears the armed alarm and its persisted epoch',
+      () async {
+        SharedPreferences.setMockInitialValues({'alarm_epoch': 1785000000});
+        await silenceOsPresent();
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        app.device.alarmEpoch = 1785000000;
+        expect(app.alarmEpoch, 1785000000);
 
-      app.debugHandleAlarmEvent(57);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+        app.debugHandleAlarmEvent(57);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
 
-      // Pre-fix this only logged + notified: alarmEpoch kept returning the past
-      // epoch across relaunches (_init reloads `alarm_epoch`) and Profile's
-      // "Smart alarm" row advertised a spent one-shot as the CURRENT alarm.
-      expect(app.alarmEpoch, isNull);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
-      expect(prefs.getInt('alarm_epoch'), isNull);
-      // the alarm screen shows the fire instead of silently swapping times
-      expect(app.alarmFiredAt, isNotNull);
-      // and a relaunch later that day still shows it
-      expect(prefs.getInt('alarm_fired_at'),
-          app.alarmFiredAt!.millisecondsSinceEpoch ~/ 1000);
-    });
+        // Pre-fix this only logged + notified: alarmEpoch kept returning the past
+        // epoch across relaunches (_init reloads `alarm_epoch`) and Profile's
+        // "Smart alarm" row advertised a spent one-shot as the CURRENT alarm.
+        expect(app.alarmEpoch, isNull);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload();
+        expect(prefs.getInt('alarm_epoch'), isNull);
+        // the alarm screen shows the fire instead of silently swapping times
+        expect(app.alarmFiredAt, isNotNull);
+        // and a relaunch later that day still shows it
+        expect(
+          prefs.getInt('alarm_fired_at'),
+          app.alarmFiredAt!.millisecondsSinceEpoch ~/ 1000,
+        );
+      },
+    );
 
-    test('the app-side EXECUTED id (58) is a RUN_ALARM buzz, the arm stays',
-        () async {
-      // Smart wake / test buzz send RUN_ALARM. Treating its 58 as the slot
-      // firing cleared the arm and, inside 30 s of the slot, re-armed
-      // tomorrow over today's still-pending alarm.
-      SharedPreferences.setMockInitialValues({'alarm_epoch': 1785000000});
-      await silenceOsPresent();
-      final app = AppState.forTesting();
-      addTearDown(app.dispose);
-      app.device.alarmEpoch = 1785000000;
+    test(
+      'the app-side EXECUTED id (58) is a RUN_ALARM buzz, the arm stays',
+      () async {
+        // Smart wake / test buzz send RUN_ALARM. Treating its 58 as the slot
+        // firing cleared the arm and, inside 30 s of the slot, re-armed
+        // tomorrow over today's still-pending alarm.
+        SharedPreferences.setMockInitialValues({'alarm_epoch': 1785000000});
+        await silenceOsPresent();
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        app.device.alarmEpoch = 1785000000;
 
-      app.debugHandleAlarmEvent(58);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+        app.debugHandleAlarmEvent(58);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
 
-      expect(app.alarmEpoch, 1785000000);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
-      expect(prefs.getInt('alarm_epoch'), 1785000000);
-    });
+        expect(app.alarmEpoch, 1785000000);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload();
+        expect(prefs.getInt('alarm_epoch'), 1785000000);
+      },
+    );
 
-    test('the strap-driven clear (event 59) also drops the persisted epoch',
-        () async {
-      SharedPreferences.setMockInitialValues({'alarm_epoch': 1785000000});
-      final app = AppState.forTesting();
-      addTearDown(app.dispose);
-      app.device.alarmEpoch = 1785000000;
+    test(
+      'the strap-driven clear (event 59) also drops the persisted epoch',
+      () async {
+        SharedPreferences.setMockInitialValues({'alarm_epoch': 1785000000});
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        app.device.alarmEpoch = 1785000000;
 
-      app.debugHandleAlarmEvent(59);
-      await Future<void>.delayed(const Duration(milliseconds: 20));
+        app.debugHandleAlarmEvent(59);
+        await Future<void>.delayed(const Duration(milliseconds: 20));
 
-      expect(app.alarmEpoch, isNull);
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.reload();
-      expect(prefs.getInt('alarm_epoch'), isNull,
-          reason: 'state was nulled but the epoch used to stay on disk and '
-              'came back on the next launch');
-    });
+        expect(app.alarmEpoch, isNull);
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.reload();
+        expect(
+          prefs.getInt('alarm_epoch'),
+          isNull,
+          reason:
+              'state was nulled but the epoch used to stay on disk and '
+              'came back on the next launch',
+        );
+      },
+    );
 
-    test('a fire while connected arms the schedule\'s next occurrence',
-        () async {
-      await silenceOsPresent();
-      final engine = _ArmRecordingEngine();
-      final app = AppState.forTesting(engine: engine);
-      addTearDown(app.dispose);
-      await app.setScheduleDay(weekday: 2, enabled: true); // offline: no arm
-      expect(engine.armed, isEmpty);
-      app.device.connection = 'connected';
-      app.device.alarmEpoch = 1785000000;
+    test(
+      'a fire while connected arms the schedule\'s next occurrence',
+      () async {
+        await silenceOsPresent();
+        final engine = _ArmRecordingEngine();
+        final app = AppState.forTesting(engine: engine);
+        addTearDown(app.dispose);
+        await app.setScheduleDay(weekday: 2, enabled: true); // offline: no arm
+        expect(engine.armed, isEmpty);
+        app.device.connection = 'connected';
+        app.device.alarmEpoch = 1785000000;
 
-      app.debugHandleAlarmEvent(57);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+        app.debugHandleAlarmEvent(57);
+        await Future<void>.delayed(const Duration(milliseconds: 50));
 
-      // Pre-fix nothing re-armed until the next reconnect: a link that stayed
-      // up all day left the next morning unarmed and Home saying
-      // "Set an alarm" while the schedule still had the day on.
-      expect(engine.armed, hasLength(1));
-      expect(engine.armed.single.isAfter(DateTime.now()), isTrue);
-      expect(engine.armed.single.weekday, DateTime.wednesday);
-      expect(app.alarmEpoch,
-          engine.armed.single.millisecondsSinceEpoch ~/ 1000);
-    });
+        // Pre-fix nothing re-armed until the next reconnect: a link that stayed
+        // up all day left the next morning unarmed and Home saying
+        // "Set an alarm" while the schedule still had the day on.
+        expect(engine.armed, hasLength(1));
+        expect(engine.armed.single.isAfter(DateTime.now()), isTrue);
+        expect(engine.armed.single.weekday, DateTime.wednesday);
+        expect(
+          app.alarmEpoch,
+          engine.armed.single.millisecondsSinceEpoch ~/ 1000,
+        );
+      },
+    );
 
     test('a headless re-arm shows up once the foreground connects', () async {
       await silenceOsPresent();
@@ -502,10 +750,12 @@ void main() {
       SharedPreferences.setMockInitialValues({'alarm_epoch': 1785000000});
       const ch = MethodChannel('dexterous.com/flutter/local_notifications');
       final cancelled = <Object?>[];
-      final messenger = TestDefaultBinaryMessengerBinding
-          .instance.defaultBinaryMessenger;
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
       messenger.setMockMethodCallHandler(ch, (call) async {
-        if (call.method == 'cancel') cancelled.add((call.arguments as Map)['id']);
+        if (call.method == 'cancel') {
+          cancelled.add((call.arguments as Map)['id']);
+        }
         return null;
       });
       addTearDown(() => messenger.setMockMethodCallHandler(ch, null));
@@ -521,32 +771,35 @@ void main() {
     });
   });
 
-  test('a late event 56 after a relaunch still confirms the earlier arm',
-      () async {
-    // Armed an hour ago, no 56 inside the grace window, app killed. The
-    // relaunch used to restamp setAtMs to launch time, so the strap's pending
-    // 56 (stamped at the real arm) read as a replay and was dropped.
-    final armMs =
-        DateTime.now().subtract(const Duration(hours: 1)).millisecondsSinceEpoch;
-    final epoch = armMs ~/ 1000 + 10 * 3600;
-    SharedPreferences.setMockInitialValues({
-      'alarm_epoch': epoch,
-      'alarm_epoch_confirmed': false,
-      'alarm_set_at_ms': armMs,
-    });
-    final app = AppState.forTesting();
-    await app.debugInit();
-    // Let start-up's fire-and-forget tails land before dispose.
-    addTearDown(() async {
-      await Future<void>.delayed(const Duration(milliseconds: 100));
-      app.dispose();
-    });
-    expect(app.alarmConfirmed, isFalse);
+  test(
+    'a late event 56 after a relaunch still confirms the earlier arm',
+    () async {
+      // Armed an hour ago, no 56 inside the grace window, app killed. The
+      // relaunch used to restamp setAtMs to launch time, so the strap's pending
+      // 56 (stamped at the real arm) read as a replay and was dropped.
+      final armMs = DateTime.now()
+          .subtract(const Duration(hours: 1))
+          .millisecondsSinceEpoch;
+      final epoch = armMs ~/ 1000 + 10 * 3600;
+      SharedPreferences.setMockInitialValues({
+        'alarm_epoch': epoch,
+        'alarm_epoch_confirmed': false,
+        'alarm_set_at_ms': armMs,
+      });
+      final app = AppState.forTesting();
+      await app.debugInit();
+      // Let start-up's fire-and-forget tails land before dispose.
+      addTearDown(() async {
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        app.dispose();
+      });
+      expect(app.alarmConfirmed, isFalse);
 
-    app.debugHandleAlarmEvent(56, tsSec: armMs ~/ 1000);
+      app.debugHandleAlarmEvent(56, tsSec: armMs ~/ 1000);
 
-    expect(app.alarmConfirmed, isTrue);
-  });
+      expect(app.alarmConfirmed, isTrue);
+    },
+  );
 
   // ── 10. dispose must release EVERYTHING AppState owns ──────────────────────
   group('dispose', () {
@@ -602,13 +855,15 @@ void main() {
       expect(app.liveHr, isNull);
     });
 
-    test('a disconnected band has no live HR however fresh the value looks',
-        () {
-      final app = connected(142);
-      addTearDown(app.dispose);
-      app.device.connection = 'disconnected';
-      expect(app.liveHr, isNull);
-    });
+    test(
+      'a disconnected band has no live HR however fresh the value looks',
+      () {
+        final app = connected(142);
+        addTearDown(app.dispose);
+        app.device.connection = 'disconnected';
+        expect(app.liveHr, isNull);
+      },
+    );
 
     test('the tick bills a fresh reading and skips an absent one', () {
       final app = connected(150);
@@ -634,8 +889,11 @@ void main() {
       app.device.liveHrAt = now() - 60 * 1000;
       app.debugTickWorkout();
       expect(w.currentHr, isNull, reason: 'absent is not zero');
-      expect(w.zoneSeconds.reduce((x, y) => x + y), billed,
-          reason: 'no zone-second for a second with no measurement');
+      expect(
+        w.zoneSeconds.reduce((x, y) => x + y),
+        billed,
+        reason: 'no zone-second for a second with no measurement',
+      );
       expect(w.maxHrSeen, peak, reason: 'the peak is untouched by an absence');
     });
 
@@ -661,76 +919,95 @@ void main() {
       d.setPaused(true);
       app.debugTickWorkout();
       expect(w.elapsed.inMinutes, 30, reason: 'the clock holds while paused');
-      expect(w.zoneSeconds.reduce((x, y) => x + y), billed,
-          reason: 'no zone-second billed while paused');
-    });
-
-    test('finishing a session that came back paused saves its real length',
-        () async {
-      await Prefs.ensureLoaded();
-      const id = 'paused-at-relaunch';
-      final app = AppState.forTesting();
-      addTearDown(app.dispose);
-      addTearDown(LiveDraft.clear);
-      // A relaunch rebuilds the session with elapsed 0, and a paused draft
-      // means no tick ever moves it.
-      final w = LiveWorkoutState(
-        startTime: DateTime.now().subtract(const Duration(minutes: 50)),
-        targetKcal: 300,
-        workoutId: id,
-        type: 'run',
+      expect(
+        w.zoneSeconds.reduce((x, y) => x + y),
+        billed,
+        reason: 'no zone-second billed while paused',
       );
-      app.activeWorkout = w;
-      LiveDraft.begin(activityByName('running')!).pausedAt =
-          DateTime.now().subtract(const Duration(minutes: 10));
-      app.debugTickWorkout();
-      expect(w.elapsed.inMinutes, 40);
-
-      w.elapsed = Duration.zero;
-      await app.stopWorkout();
-      expect((await LocalDb.session(id))?['duration_min'], 40);
     });
 
-    test('a paused draft left from an older session does not hold a new one',
-        () async {
-      await Prefs.ensureLoaded();
-      final app = connected(150);
-      addTearDown(app.dispose);
-      addTearDown(LiveDraft.clear);
-      LiveDraft.begin(activityByName('running')!).setPaused(true);
-      // The gesture path: startWorkout with no setup screen, so no new draft.
-      app.startWorkout(type: 'other');
-      addTearDown(app.stopWorkout); // no live row left for later reconciles
-      expect(LiveDraft.current, isNull);
-      app.debugTickWorkout();
-      expect(app.activeWorkout!.zoneSeconds.reduce((x, y) => x + y), 1,
-          reason: 'the new session ticks');
-    });
+    test(
+      'finishing a session that came back paused saves its real length',
+      () async {
+        await Prefs.ensureLoaded();
+        const id = 'paused-at-relaunch';
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        addTearDown(LiveDraft.clear);
+        // A relaunch rebuilds the session with elapsed 0, and a paused draft
+        // means no tick ever moves it.
+        final w = LiveWorkoutState(
+          startTime: DateTime.now().subtract(const Duration(minutes: 50)),
+          targetKcal: 300,
+          workoutId: id,
+          type: 'run',
+        );
+        app.activeWorkout = w;
+        LiveDraft.begin(activityByName('running')!).pausedAt = DateTime.now()
+            .subtract(const Duration(minutes: 10));
+        app.debugTickWorkout();
+        expect(w.elapsed.inMinutes, 40);
 
-    test('resuming after a long pause does not ask "still working out?"',
-        () async {
-      await Prefs.ensureLoaded();
-      final app = connected(null);
-      addTearDown(app.dispose);
-      addTearDown(LiveDraft.clear);
-      final w = LiveWorkoutState(
-        startTime: DateTime.now().subtract(const Duration(minutes: 30)),
-        targetKcal: 300,
-        workoutId: 'w1',
-        type: 'run',
-      );
-      app.activeWorkout = w;
-      final d = LiveDraft.begin(activityByName('running')!)
-        ..pausedAt = DateTime.now().subtract(const Duration(minutes: 25));
-      app.debugTickWorkout();
-      expect(w.idleWatch.lastAskAt, isNotNull,
-          reason: 'a pause left running past the threshold is still asked '
-              'about: paused and forgotten is a forgotten session');
-      d.setPaused(false);
-      app.debugTickWorkout();
-      expect(w.idleWatch.lastAskAt, isNull,
-          reason: 'the pause was the user, not a forgotten session');
-    });
+        w.elapsed = Duration.zero;
+        await app.stopWorkout();
+        expect((await LocalDb.session(id))?['duration_min'], 40);
+      },
+    );
+
+    test(
+      'a paused draft left from an older session does not hold a new one',
+      () async {
+        await Prefs.ensureLoaded();
+        final app = connected(150);
+        addTearDown(app.dispose);
+        addTearDown(LiveDraft.clear);
+        LiveDraft.begin(activityByName('running')!).setPaused(true);
+        // The gesture path: startWorkout with no setup screen, so no new draft.
+        app.startWorkout(type: 'other');
+        addTearDown(app.stopWorkout); // no live row left for later reconciles
+        expect(LiveDraft.current, isNull);
+        app.debugTickWorkout();
+        expect(
+          app.activeWorkout!.zoneSeconds.reduce((x, y) => x + y),
+          1,
+          reason: 'the new session ticks',
+        );
+      },
+    );
+
+    test(
+      'resuming after a long pause does not ask "still working out?"',
+      () async {
+        await Prefs.ensureLoaded();
+        final app = connected(null);
+        addTearDown(app.dispose);
+        addTearDown(LiveDraft.clear);
+        final w = LiveWorkoutState(
+          startTime: DateTime.now().subtract(const Duration(minutes: 30)),
+          targetKcal: 300,
+          workoutId: 'w1',
+          type: 'run',
+        );
+        app.activeWorkout = w;
+        final d = LiveDraft.begin(activityByName('running')!)
+          ..pausedAt = DateTime.now().subtract(const Duration(minutes: 25));
+        app.debugTickWorkout();
+        expect(
+          w.idleWatch.lastAskAt,
+          isNotNull,
+          reason:
+              'a pause left running past the threshold is still asked '
+              'about: paused and forgotten is a forgotten session',
+        );
+        d.setPaused(false);
+        app.debugTickWorkout();
+        expect(
+          w.idleWatch.lastAskAt,
+          isNull,
+          reason: 'the pause was the user, not a forgotten session',
+        );
+      },
+    );
 
     test('the tick consults the idle watch — a quiet session asks', () {
       // The wiring, not the policy (workout_idle_test.dart owns the policy):
@@ -746,8 +1023,11 @@ void main() {
       );
       app.activeWorkout = w;
       app.debugTickWorkout();
-      expect(w.idleWatch.lastAskAt, isNotNull,
-          reason: '30 quiet minutes into an open session, the watch asks');
+      expect(
+        w.idleWatch.lastAskAt,
+        isNotNull,
+        reason: '30 quiet minutes into an open session, the watch asks',
+      );
 
       final active = connected(150);
       addTearDown(active.dispose);
@@ -759,8 +1039,11 @@ void main() {
       );
       active.activeWorkout = w2;
       active.debugTickWorkout();
-      expect(w2.idleWatch.lastAskAt, isNull,
-          reason: 'a real reading (no gate → any reading) is activity');
+      expect(
+        w2.idleWatch.lastAskAt,
+        isNull,
+        reason: 'a real reading (no gate → any reading) is activity',
+      );
     });
 
     test('a zone-1 reading below the calorie gate is not "resting" (#466)', () {
@@ -768,14 +1051,14 @@ void main() {
       // A steady 100 bpm session reads ZONE 1 on the live bar, so it must not
       // be asked "nothing above resting effort".
       LiveWorkoutState session(String id) => LiveWorkoutState(
-            startTime: DateTime.now().subtract(const Duration(minutes: 30)),
-            targetKcal: 300,
-            workoutId: id,
-            type: 'strength',
-            hrMax: 190,
-            restingHr: 60,
-            zoneSet: ana.HeartRateZones.zonesFromMaxHr(190),
-          );
+        startTime: DateTime.now().subtract(const Duration(minutes: 30)),
+        targetKcal: 300,
+        workoutId: id,
+        type: 'strength',
+        hrMax: 190,
+        restingHr: 60,
+        zoneSet: ana.HeartRateZones.zonesFromMaxHr(190),
+      );
       final app = connected(100);
       addTearDown(app.dispose);
       final w = session('z1');
@@ -788,8 +1071,11 @@ void main() {
       final w2 = session('rest');
       rest.activeWorkout = w2;
       rest.debugTickWorkout();
-      expect(w2.idleWatch.lastAskAt, isNotNull,
-          reason: 'below zone 1 is still quiet');
+      expect(
+        w2.idleWatch.lastAskAt,
+        isNotNull,
+        reason: 'below zone 1 is still quiet',
+      );
     });
 
     test('a high resting HR still lets the zone-1 edge win (#466)', () {
@@ -829,8 +1115,11 @@ void main() {
       );
       app.activeWorkout = w;
       app.debugTickWorkout();
-      expect(w.idleWatch.lastAskAt, isNotNull,
-          reason: 'resting HR is quiet whatever zone 1 says');
+      expect(
+        w.idleWatch.lastAskAt,
+        isNotNull,
+        reason: 'resting HR is quiet whatever zone 1 says',
+      );
     });
 
     test('a zone-1 edge just above resting HR does not mute the watch', () {
@@ -850,8 +1139,11 @@ void main() {
       );
       app.activeWorkout = w;
       app.debugTickWorkout();
-      expect(w.idleWatch.lastAskAt, isNotNull,
-          reason: 'sleeping HR just above RHR is quiet');
+      expect(
+        w.idleWatch.lastAskAt,
+        isNotNull,
+        reason: 'sleeping HR just above RHR is quiet',
+      );
     });
   });
 
@@ -905,17 +1197,31 @@ void main() {
 
       final w = app.activeWorkout;
       expect(w?.workoutId, id);
-      expect(w?.maxHrSeen, 150,
-          reason: 'the pre-kill peak must survive, not restart at 0');
-      expect(w?.zoneMinutes()[2], closeTo(15.0, 1e-9),
-          reason: 'zone 3 (index 2 of the Z1..Z5 payload) had 900s banked '
-              'before the kill — resuming at 0.0 would be the reported bug');
-      expect(w?.strain, isNotNull,
-          reason: 'strain must recompute off the restored per-minute series, '
-              'not abstain as if no sample had ever arrived');
+      expect(
+        w?.maxHrSeen,
+        150,
+        reason: 'the pre-kill peak must survive, not restart at 0',
+      );
+      expect(
+        w?.zoneMinutes()[2],
+        closeTo(15.0, 1e-9),
+        reason:
+            'zone 3 (index 2 of the Z1..Z5 payload) had 900s banked '
+            'before the kill — resuming at 0.0 would be the reported bug',
+      );
+      expect(
+        w?.strain,
+        isNotNull,
+        reason:
+            'strain must recompute off the restored per-minute series, '
+            'not abstain as if no sample had ever arrived',
+      );
       expect(w!.strain! > 0, isTrue);
-      expect(w.caloriesOrNull, isNotNull,
-          reason: 'calories must recompute off the restored bpm histogram');
+      expect(
+        w.caloriesOrNull,
+        isNotNull,
+        reason: 'calories must recompute off the restored bpm histogram',
+      );
       expect(w.caloriesOrNull! > 0, isTrue);
 
       // The DB snapshot is exhausted at reconcile time; a genuinely killed
@@ -943,9 +1249,13 @@ void main() {
       final w = app.activeWorkout;
       expect(w?.workoutId, id);
       expect(w?.maxHrSeen, 0);
-      expect(w?.zoneMinutes().every((v) => v == 0), isTrue,
-          reason: 'no snapshot ever existed for this id — zero is honest '
-              'here, not a bug');
+      expect(
+        w?.zoneMinutes().every((v) => v == 0),
+        isTrue,
+        reason:
+            'no snapshot ever existed for this id — zero is honest '
+            'here, not a bug',
+      );
     });
 
     test('stopWorkout deletes the tally so it cannot leak onto a future '
@@ -968,31 +1278,39 @@ void main() {
       expect(await LocalDb.liveWorkoutTally(id), isNull);
     });
 
-    test('deleting the running session ends it, and stop cannot bring it back',
-        () async {
-      await Prefs.ensureLoaded();
-      const id = 'deleted-while-live';
-      final app = AppState.forTesting();
-      addTearDown(app.dispose);
-      addTearDown(LiveDraft.clear);
-      app.repo = _DeleteRepo();
-      app.startWorkout(workoutId: id, type: 'run');
-      LiveDraft.begin(activityByName('running')!).setPaused(true);
-      expect(await LocalDb.session(id), isNotNull);
+    test(
+      'deleting the running session ends it, and stop cannot bring it back',
+      () async {
+        await Prefs.ensureLoaded();
+        const id = 'deleted-while-live';
+        final app = AppState.forTesting();
+        addTearDown(app.dispose);
+        addTearDown(LiveDraft.clear);
+        app.repo = _DeleteRepo();
+        app.startWorkout(workoutId: id, type: 'run');
+        LiveDraft.begin(activityByName('running')!).setPaused(true);
+        expect(await LocalDb.session(id), isNotNull);
 
-      await app.deleteWorkout(id);
+        await app.deleteWorkout(id);
 
-      expect(app.activeWorkout, isNull);
-      expect(LiveDraft.current, isNull,
-          reason: 'a paused draft left behind would freeze the next session');
-      await app.stopWorkout();
-      expect(await LocalDb.session(id), isNull);
-    });
+        expect(app.activeWorkout, isNull);
+        expect(
+          LiveDraft.current,
+          isNull,
+          reason: 'a paused draft left behind would freeze the next session',
+        );
+        await app.stopWorkout();
+        expect(await LocalDb.session(id), isNull);
+      },
+    );
   });
 }
 
 class _ConnectedEngine extends BleEngine {
-  _ConnectedEngine() : super(onRecord: (_, _) async {}, onState: (_) {});
+  _ConnectedEngine({this.records = 0, this.fails = false})
+    : super(onRecord: (_, _) async {}, onState: (_) {});
+  final int records;
+  final bool fails;
   int historyRequests = 0;
   int foregroundRequests = 0;
   int syncs = 0;
@@ -1012,7 +1330,8 @@ class _ConnectedEngine extends BleEngine {
     Duration timeout = const Duration(seconds: 600),
   }) async {
     syncs++;
-    return SyncReport(0, 0, true);
+    if (fails) throw StateError('sync failed');
+    return SyncReport(records, records == 0 ? 0 : 1, true);
   }
 }
 
@@ -1021,8 +1340,11 @@ class _ArmRecordingEngine extends BleEngine {
   _ArmRecordingEngine() : super(onRecord: (_, _) async {}, onState: (_) {});
   final armed = <DateTime>[];
   @override
-  Future<DateTime?> setAlarm(DateTime when,
-      {int index = 0, List<int>? haptics}) async {
+  Future<DateTime?> setAlarm(
+    DateTime when, {
+    int index = 0,
+    List<int>? haptics,
+  }) async {
     armed.add(when);
     return when;
   }

@@ -33,6 +33,8 @@ import '../ai/reminder_plan.dart';
 import '../data/day_label.dart';
 import '../data/journal_fields.dart';
 import '../data/med_store.dart';
+import '../state/locale_controller.dart';
+import 'notification_presentation.dart';
 import '../state/clock_format.dart' show formatClockMinute;
 import 'fired_keys.dart';
 import 'notification_event.dart';
@@ -125,7 +127,7 @@ class NotificationCenter {
         var shown = false;
         try {
           shown = await presentSink(
-            e,
+            localizeNotificationEvent(e, await LocaleController.presentationLocalizations()),
             allowPermissionPrompt: allowPermissionPrompt,
           );
         } finally {
@@ -385,11 +387,12 @@ class NotificationCenter {
   /// about today specifically, and a repeat would go on warning about a night
   /// that, by the next evening, may well have a real alarm set.
   Future<void> _armAlarmNightCheck(NotificationService svc, int minuteOfDay) async {
+    final l = await LocaleController.presentationLocalizations();
     await svc.scheduleOnce(
       id: NotificationService.idAlarmNightCheck,
       category: NotifCategory.reminders,
-      title: 'No alarm set for tonight',
-      body: 'You have no wake alarm armed for tonight.',
+      title: notificationTitle('No alarm set for tonight', l),
+      body: notificationBody('You have no wake alarm armed for tonight.', l),
       at: svc.nextDailyInstant(minuteOfDay ~/ 60, minuteOfDay % 60),
       route: kRouteAlarm,
     );
@@ -409,6 +412,7 @@ class NotificationCenter {
   /// time, the same reasoning that exempts the alarm. Someone who takes a pill
   /// at 23:00 typed 23:00.
   Future<void> _armMedSlots(NotificationService svc, List<MedSlot> slots) async {
+    final l = await LocaleController.presentationLocalizations();
     for (var i = 0; i < slots.length; i++) {
       final s = slots[i];
       final at = medSlotInstant(s);
@@ -421,10 +425,10 @@ class NotificationCenter {
         // sensitive fact in the app. The checklist behind the tap says which —
         // one unlock away, which is where that belongs. It is also why the
         // body is not a dose or a count.
-        title: 'Medication',
+        title: notificationTitle('Medication', l),
         // Not an adherence score, not a streak, and nothing about a dose that
         // was missed: this is the reminder, not the report.
-        body: 'A dose is due.',
+        body: notificationBody('A dose is due.', l),
         at: at,
         route: kRouteMeds,
       );
@@ -438,12 +442,13 @@ class NotificationCenter {
   /// journal was filled in. Re-armed on every foreground pass, and once the day
   /// has any rating in it the caller moves it to tomorrow.
   Future<void> _armCheckIn(NotificationService svc, DateTime at) async {
+    final l = await LocaleController.presentationLocalizations();
     await svc.scheduleOnce(
       id: NotificationService.idCheckIn,
       category: NotifCategory.reminders,
-      title: 'How was today?',
+      title: notificationTitle('How was today?', l),
       // No guilt, no count, no reference to a day that was missed.
-      body: 'Mood, energy, stress — a minute of it.',
+      body: notificationBody('Mood, energy, stress — a minute of it.', l),
       at: at,
       route: kRouteJournalCompose,
     );
@@ -461,12 +466,13 @@ class NotificationCenter {
   /// Copy rule: this may nudge you to LOG a drink and nothing more. The app
   /// measures no hydration, scores none, and this text may never imply either.
   Future<void> _armWaterSlots(NotificationService svc, List<int> slots) async {
+    final l = await LocaleController.presentationLocalizations();
     for (var i = 0; i < slots.length; i++) {
       await svc.scheduleDaily(
         id: NotificationService.idWaterBase + i,
         category: NotifCategory.reminders,
-        title: 'Water',
-        body: 'Tap to log a glass.',
+        title: notificationTitle('Water', l),
+        body: notificationBody('Tap to log a glass.', l),
         hour: slots[i] ~/ 60,
         minute: slots[i] % 60,
         route: kRouteWater,
@@ -487,11 +493,12 @@ class NotificationCenter {
     int minuteOfDay,
     double bedtimeMinOfDay,
   ) async {
+    final l = await LocaleController.presentationLocalizations();
     await svc.scheduleDaily(
       id: NotificationService.idWindDown,
       category: NotifCategory.reminders,
-      title: 'Wind down',
-      body: windDownBody(bedtimeMinOfDay),
+      title: notificationTitle('Wind down', l),
+      body: notificationBody(windDownBody(bedtimeMinOfDay), l),
       hour: minuteOfDay ~/ 60,
       minute: minuteOfDay % 60,
       route: kRouteBreathing,
@@ -611,11 +618,12 @@ class NotificationCenter {
 
   Future<void> _armWeeklyLookback(
       NotificationService svc, String finding) async {
+    final l = await LocaleController.presentationLocalizations();
     await svc.scheduleOnce(
       id: NotificationService.idWeeklyRecap,
       category: NotifCategory.reminders,
-      title: 'Your week in review',
-      body: finding,
+      title: notificationTitle('Your week in review', l),
+      body: notificationBody(finding, l),
       at: svc.nextWeeklyInstant(recapWeekday, recapHour, recapMinute),
       // A week of sleep, strain and recovery lives on Health.
       route: kRouteRecap,
@@ -858,6 +866,7 @@ class NotificationCenter {
     ).where((s) => NotificationService.maySchedule(s.id)).toList();
     if (plan.isEmpty) return;
     await svc.ensureTimezone();
+    final l = await LocaleController.presentationLocalizations();
     final nowMin = DateTime.now().hour * 60 + DateTime.now().minute;
     for (final s in plan) {
       // ONE-SHOT, and only when the slot is still ahead TODAY.
@@ -873,8 +882,8 @@ class NotificationCenter {
       await svc.scheduleOnce(
         id: s.id,
         category: NotifCategory.reminders,
-        title: s.title,
-        body: s.body,
+        title: notificationTitle(s.title, l),
+        body: notificationBody(s.body, l),
         at: svc.nextDailyInstant(s.hour, s.minute),
         route: s.route,
       );

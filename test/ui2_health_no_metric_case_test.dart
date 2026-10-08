@@ -14,35 +14,52 @@ import 'package:openstrap_edge/ui2/ui2.dart';
 class _Repo extends LocalRepository {
   @override
   Future<Map<String, dynamic>> getToday() async => const {
-        'status': {'today_day': '2026-08-16'}
-      };
+    'status': {'today_day': '2026-08-16'},
+  };
 
   @override
   Future<List<String>> availableDays() async => const ['2026-08-16'];
+
+  @override
+  Future<Map<String, dynamic>> getInsights() async => const {};
+
+  @override
+  Future<Map<String, dynamic>> getProfile() async => const {};
+
+  @override
+  Future<Map<String, dynamic>> getChart(
+    String metric, {
+    int? from,
+    int? to,
+    Set<String> signals = const {},
+  }) async => const {};
 }
 
 Future<void> _pump(WidgetTester t, Locale locale) async {
   final app = AppState.forTesting();
   addTearDown(app.dispose);
   app.repo = _Repo();
-  await t.pumpWidget(MaterialApp(
-    theme: buildTheme(Brightness.light),
-    locale: locale,
-    localizationsDelegates: AppLocalizations.localizationsDelegates,
-    supportedLocales: AppLocalizations.supportedLocales,
-    home: ChangeNotifierProvider<AppState>.value(
-      value: app,
-      child: const Scaffold(body: HealthScreen()),
+  await t.pumpWidget(
+    MaterialApp(
+      theme: buildTheme(Brightness.light),
+      locale: locale,
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: ChangeNotifierProvider<AppState>.value(
+        value: app,
+        child: const Scaffold(body: HealthScreen()),
+      ),
     ),
-  ));
+  );
   for (var i = 0; i < 20; i++) {
     await t.pump();
   }
 }
 
 void main() {
-  testWidgets('german keeps the noun case in the blank-metric title',
-      (t) async {
+  testWidgets('german keeps the noun case in the blank-metric title', (
+    t,
+  ) async {
     t.view.physicalSize = const Size(800 * 3, 4000 * 3);
     t.view.devicePixelRatio = 3;
     addTearDown(t.view.reset);

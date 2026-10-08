@@ -151,7 +151,7 @@ class MonthGrid extends StatelessWidget {
                       children: [
                         Expanded(
                           child: Text(
-                            r.spec.title,
+                            (l?.metricName(r.spec.chartKey == 'tst' ? 'sleep' : r.spec.chartKey, r.spec.title) ?? r.spec.title),
                             style: F.over.copyWith(color: p.ink2),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
@@ -169,8 +169,8 @@ class MonthGrid extends StatelessWidget {
                   ),
                   Semantics(
                     label: l?.monthGridSemanticsLabel(
-                            r.spec.title, r.have, kGridDays) ??
-                        '${r.spec.title}: ${r.have} of $kGridDays days have '
+                            l.metricName(r.spec.chartKey == 'tst' ? 'sleep' : r.spec.chartKey, r.spec.title), r.have, kGridDays) ??
+                        '${(l?.metricName(r.spec.chartKey == 'tst' ? 'sleep' : r.spec.chartKey, r.spec.title) ?? r.spec.title)}: ${r.have} of $kGridDays days have '
                             'a value. Shaded against your own range.',
                     child: SizedBox(
                       height: 22,
@@ -214,8 +214,8 @@ class MonthGrid extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: S.x3),
             child: StatusCard(
-              l?.monthGridNotShadedYetTitle(r.spec.title) ??
-                  '${r.spec.title} is not shaded yet',
+              l?.monthGridNotShadedYetTitle(l.metricName(r.spec.chartKey == 'tst' ? 'sleep' : r.spec.chartKey, r.spec.title)) ??
+                  '${(l?.metricName(r.spec.chartKey == 'tst' ? 'sleep' : r.spec.chartKey, r.spec.title) ?? r.spec.title)} is not shaded yet',
               l?.monthGridNotShadedYetBody(r.historyDays, kGridMinHistory) ??
                   'A shade is where a day sits in your own range, and '
                       '${r.historyDays} day${r.historyDays == 1 ? '' : 's'} is not '

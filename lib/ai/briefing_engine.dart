@@ -17,6 +17,8 @@
 // to narrate the thing it measures out of whatever else it was handed, and this
 // file already documents that happening (see [readinessBand]).
 
+import 'package:uuid/uuid.dart';
+
 import '../coach/coach_config.dart';
 import '../coach/coach_engine.dart';
 import '../data/day_label.dart';
@@ -134,7 +136,7 @@ Future<Map<String, dynamic>> collectBriefingInputs(
       final eff = _num(ds['efficiency']);
       take('sleep_efficiency_pct',
           eff == null ? null : (eff <= 1 ? eff * 100 : eff), round: 0);
-      take('sleep_debt_min', ds['debt_min'], round: 0);
+      take('sleep_target_shortfall_min', ds['target_shortfall_min'], round: 0);
       take('deep_min', ds['deep_min'], round: 0);
       take('rem_min', ds['rem_min'], round: 0);
       take('awake_min', ds['awake_min'], round: 0);
@@ -365,6 +367,8 @@ String briefingSystemPrompt(BriefingPeriod period) {
       '(low / moderate / good) is AUTHORITATIVE for tone: a low or moderate '
       'band must never be described as strong, solid or good recovery, even '
       'if individual sub-metrics (HRV, RHR) look fine in isolation.\n'
+      '- "sleep_target_shortfall_min" means minutes below a pre-sleep planning '
+      'target. It does not measure biological sleep need or proven sleep debt.\n'
       '- Warm, direct, second person. No emojis. No headers.\n'
       'OUTPUT FORMAT (exactly):\n'
       'Line 1: one plain-text sentence, max 140 characters — the whole story '
@@ -496,6 +500,7 @@ class BriefingEngine {
     // because the payload really was empty.
     if (period == BriefingPeriod.evening && inputs.isEmpty) {
       final b = Briefing(
+        id: const Uuid().v4(),
         day: day,
         period: period,
         oneLiner: kNothingStoodOut,
@@ -518,6 +523,7 @@ class BriefingEngine {
     }
     final parsed = parseBriefingResponse(raw);
     final b = Briefing(
+      id: const Uuid().v4(),
       day: day,
       period: period,
       oneLiner: parsed.oneLiner,

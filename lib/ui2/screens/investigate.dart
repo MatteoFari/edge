@@ -272,7 +272,7 @@ class _InvestigateState extends State<Investigate> {
   @override
   Widget build(BuildContext c) {
     final l = AppLocalizations.of(c);
-    final spec = specOf(widget.metricKey);
+    final spec = specOf(widget.metricKey, AppLocalizations.of(context));
     final d = _d ?? const InvestigateData();
     final hrvish = widget.metricKey == 'hrv';
 
@@ -319,7 +319,7 @@ class _InvestigateState extends State<Investigate> {
             l?.investigateWhatHappenedTitle ?? 'What happened that day',
             l?.investigateWhatHappenedSub ??
                 'Sleep, sessions, meals and logs in time order',
-            () => go(c, DayTimelineScreen(day: d.day)),
+            null, destination: DayTimelineScreen(day: d.day),
           ),
         ],
         const SizedBox(height: S.x5),

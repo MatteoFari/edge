@@ -277,7 +277,9 @@ class _CycleTabState extends State<CycleTab> with RevisionReload {
       context: context,
       sheetAnimationStyle: sheetMotion(context),
       backgroundColor: p.card,
-      shape: const RoundedRectangleBorder(borderRadius: R.rXl),
+      shape: RoundedRectangleBorder(
+        borderRadius: p.expressive ? R.rXxl : R.rXl,
+      ),
       builder: (c) => SafeArea(
         child: ListView(
           shrinkWrap: true,
@@ -384,9 +386,7 @@ class _CycleTabState extends State<CycleTab> with RevisionReload {
               : (l?.cycleUnitCompleteCycles ?? 'complete cycles'),
           l?.cycleOpenAction ?? 'Open',
           C.pink,
-          onTap: () => Navigator.of(
-            c,
-          ).push(MaterialPageRoute<void>(builder: (_) => _CycleHistory(d))),
+          destination: _CycleHistory(d),
         ),
 
         Section(

@@ -31,6 +31,8 @@ class SetRow extends StatelessWidget {
   final String title, sub, value;
   final bool danger, chevron;
   final VoidCallback? onTap;
+  final Widget? destination;
+  final Future<void> Function(DetailOpener)? onNavigate;
 
   /// A brand mark in place of [icon] — Lucide has no GitHub/Discord/Reddit
   /// logo, and a generic glyph standing in for one of those is worse than
@@ -43,8 +45,12 @@ class SetRow extends StatelessWidget {
       this.value = '',
       this.danger = false,
       this.chevron = true,
-      this.onTap})
-      : glyph = null;
+      this.onTap,
+      this.destination,
+      this.onNavigate})
+      : glyph = null,
+        assert(onTap == null || (destination == null && onNavigate == null)),
+        assert(destination == null || onNavigate == null);
 
   const SetRow.brand(this.glyph, this.color, this.title,
       {super.key,
@@ -52,15 +58,19 @@ class SetRow extends StatelessWidget {
       this.value = '',
       this.danger = false,
       this.chevron = true,
-      this.onTap})
-      : icon = null;
+      this.onTap,
+      this.destination,
+      this.onNavigate})
+      : icon = null,
+        assert(onTap == null || (destination == null && onNavigate == null)),
+        assert(destination == null || onNavigate == null);
 
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
     final accent = danger ? C.red : color;
-    return Pressable(
-      onTap: onTap,
+    Widget press(VoidCallback? tap) => Pressable(
+      onTap: tap,
       semanticLabel: sub.isEmpty ? title : '$title. $sub',
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: S.x3),
@@ -70,7 +80,9 @@ class SetRow extends StatelessWidget {
             height: 32,
             alignment: Alignment.center,
             decoration:
-                BoxDecoration(color: p.wash(accent), borderRadius: R.rSm),
+                BoxDecoration(
+                    color: p.wash(accent),
+                    borderRadius: p.expressive ? R.rPill : R.rSm),
             child: glyph != null
                 ? glyph!(p.on(accent))
                 : Icon(icon, size: 16, color: p.on(accent)),
@@ -106,6 +118,17 @@ class SetRow extends StatelessWidget {
         ]),
       ),
     );
+    return destination == null && onNavigate == null
+        ? press(onTap)
+        : DetailLink(
+            builder: (open) => press(() {
+              if (onNavigate != null) {
+                onNavigate!(open);
+              } else {
+                open<void>(destination!);
+              }
+            }),
+          );
   }
 }
 
@@ -142,6 +165,7 @@ void openProfile(BuildContext c) => goto(c, const ProfileHome());
 /// actually has translations for.
 const Map<String, String> _kLanguageNames = {
   'en': 'English',
+  'it': 'Italiano',
   'es': 'Español',
   'fr': 'Français',
   'de': 'Deutsch',
@@ -243,8 +267,8 @@ class _ProfileHomeState extends State<ProfileHome> {
     );
   }
 
-  Future<void> _open(BuildContext c, Widget w) async {
-    await goto(c, w);
+  Future<void> _open(DetailOpener open, Widget w) async {
+    await open<void>(w);
     // A block body, not `=>`: the arrow form returns the assigned Future, which
     // setState asserts against (debug builds throw and skip the rebuild).
     if (!mounted) return;
@@ -258,10 +282,7 @@ class _ProfileHomeState extends State<ProfileHome> {
         future: _stats,
         builder: (c, snap) => ProfileHomeView(
           stats: snap.data,
-          onDevices: () => _open(c, const MyDevices()),
-          onSettings: () => _open(c, const MoreSettings()),
-          onEdit: () => _open(c, const EditProfile()),
-          onCoach: () => _open(c, const CoachSetup()),
+          onNavigate: _open,
         ),
       );
 }
@@ -271,6 +292,7 @@ class ProfileHomeView extends StatelessWidget {
   /// zero, and a zero rendered during a load is a wrong number on screen.
   final ProfileStats? stats;
   final VoidCallback? onDevices, onSettings, onEdit, onCoach;
+  final Future<void> Function(DetailOpener, Widget)? onNavigate;
 
   const ProfileHomeView(
       {super.key,
@@ -279,6 +301,7 @@ class ProfileHomeView extends StatelessWidget {
       this.onCoach,
       this.onSettings,
       this.onEdit,
+      this.onNavigate,
       });
 
   @override
@@ -306,12 +329,16 @@ class ProfileHomeView extends StatelessWidget {
                           ? ''
                           : (l?.profileSourcesCount(s.sources) ??
                               '${s.sources} source${s.sources == 1 ? '' : 's'}'),
-                      onTap: onDevices),
+                      onTap: onNavigate == null ? onDevices : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const MyDevices())),
                   SetRow(LucideIcons.userPen, C.purple,
                       l?.profileEditProfile ?? 'Edit profile',
                       sub: l?.profileEditProfileSub ??
                           'Sex, age, height, weight',
-                      onTap: onEdit),
+                      onTap: onNavigate == null ? onEdit : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const EditProfile())),
                   // THE ONLY DOOR TO THE COACH'S SETUP, and it has to be —
                   // Home's sparkles button is now gated on `coachReady`, so on
                   // a fresh install there is no icon to find it behind. It
@@ -327,7 +354,9 @@ class ProfileHomeView extends StatelessWidget {
                       sub: coachSubtitle(c) ??
                           (AppLocalizations.of(c)?.profileNotSetUp ??
                               'Not set up'),
-                      onTap: onCoach)),
+                      onTap: onNavigate == null ? onCoach : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const CoachSetup()))),
                   Builder(builder: (c) => SetRow(
                       LucideIcons.languages, C.blue,
                       AppLocalizations.of(c)?.profileLanguage ?? 'Language',
@@ -353,7 +382,9 @@ class ProfileHomeView extends StatelessWidget {
                       sub: l?.profileMoreSettingsSub(storeName) ??
                           'Import from $storeName, export, backup, units, '
                               'privacy, reset',
-                      onTap: onSettings),
+                      onTap: onNavigate == null ? onSettings : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const MoreSettings())),
                 ]),
                 settingsGroup(c, l?.profileCommunityGroup ?? 'Community', [
                   SetRow.brand(brandGlyph('assets/icons/github.svg'), C.n500,

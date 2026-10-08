@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../widget/widget_service.dart';
+import '../ui2/theme.dart' show ExpressivePalette, InterfaceStyle, P;
 import 'tokens.dart';
 import 'theme.dart';
 
@@ -29,17 +30,26 @@ extension AppThemeChoiceLabel on AppThemeChoice {
 
 class ThemeController extends ChangeNotifier {
   static const String _kChoice = 'theme_choice'; // 'system' | 'light' | 'dark'
+  static const String _kInterfaceStyle = 'ui.interface_style';
+  static const String _kPalette = 'ui.expressive_palette';
 
   AppThemeChoice _choice;
   Brightness _platform;
+  InterfaceStyle _interfaceStyle;
+  ExpressivePalette _palette;
+  Future<void> _interfaceWrites = Future<void>.value();
+  bool _disposed = false;
 
-  ThemeController._(this._choice, this._platform) {
+  ThemeController._(this._choice, this._platform, this._interfaceStyle,
+      this._palette) {
     _applyActive(); // make AppColors.active correct immediately
   }
 
   /// Build synchronously from already-loaded inputs (used by [bootstrap]).
-  factory ThemeController.seed(AppThemeChoice choice, Brightness platform) =>
-      ThemeController._(choice, platform);
+  factory ThemeController.seed(AppThemeChoice choice, Brightness platform,
+          {InterfaceStyle interfaceStyle = InterfaceStyle.original,
+           ExpressivePalette palette = ExpressivePalette.edge}) =>
+      ThemeController._(choice, platform, interfaceStyle, palette);
 
   /// Load the persisted choice + current OS brightness and set [AppColors.active]
   /// BEFORE the first frame. Call from main() before runApp so login/signup
@@ -49,7 +59,13 @@ class ThemeController extends ChangeNotifier {
     final choice = _parse(prefs.getString(_kChoice));
     final platform =
         WidgetsBinding.instance.platformDispatcher.platformBrightness;
-    final c = ThemeController._(choice, platform);
+    final style = prefs.getString(_kInterfaceStyle) == 'expressive'
+        ? InterfaceStyle.expressive : InterfaceStyle.original;
+    final paletteId = prefs.getString(_kPalette);
+    final palette = ExpressivePalette.values.firstWhere(
+        (value) => value.name == paletteId,
+        orElse: () => ExpressivePalette.edge);
+    final c = ThemeController._(choice, platform, style, palette);
     c._applySystemChrome();
     return c;
   }
@@ -61,6 +77,59 @@ class ThemeController extends ChangeNotifier {
       };
 
   AppThemeChoice get choice => _choice;
+  InterfaceStyle get interfaceStyle => _interfaceStyle;
+  ExpressivePalette get palette => _palette;
+
+  /// Save before publishing the presentation choice. Serial writes prevent a
+  /// slower earlier tap from overwriting a newer selection. No data service
+  /// or recovery baseline is recreated when this preference changes.
+  Future<bool> setInterfaceStyle(InterfaceStyle style) {
+    final task = _interfaceWrites.then((_) async {
+      if (_disposed) return false;
+      if (_interfaceStyle == style) return true;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (!await prefs.setString(_kInterfaceStyle, style.name)) return false;
+        if (_disposed) return false;
+        _interfaceStyle = style;
+        _applySystemChrome();
+        notifyListeners();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    });
+    _interfaceWrites = task.then((_) {});
+    return task;
+  }
+
+  /// The same serial queue protects palette and style changes. Publishing only
+  /// after saving keeps a refused write from appearing to persist.
+  Future<bool> setPalette(ExpressivePalette palette) {
+    final task = _interfaceWrites.then((_) async {
+      if (_disposed) return false;
+      if (_palette == palette) return true;
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (!await prefs.setString(_kPalette, palette.name)) return false;
+        if (_disposed) return false;
+        _palette = palette;
+        _applySystemChrome();
+        notifyListeners();
+        return true;
+      } catch (_) {
+        return false;
+      }
+    });
+    _interfaceWrites = task.then((_) {});
+    return task;
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
 
   /// The brightness actually being rendered.
   Brightness get effective => switch (_choice) {
@@ -113,7 +182,8 @@ class ThemeController extends ChangeNotifier {
       statusBarColor: Colors.transparent,
       statusBarIconBrightness: isDark ? Brightness.light : Brightness.dark,
       statusBarBrightness: isDark ? Brightness.dark : Brightness.light,
-      systemNavigationBarColor: AppColors.bg,
+      systemNavigationBarColor: _interfaceStyle == InterfaceStyle.expressive
+          ? P(isDark, expressive: true, palette: _palette).bg : AppColors.bg,
       systemNavigationBarIconBrightness:
           isDark ? Brightness.light : Brightness.dark,
     ));

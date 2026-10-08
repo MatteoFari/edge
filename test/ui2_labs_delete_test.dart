@@ -312,6 +312,10 @@ void main() {
           findsOneWidget,
           reason: bad);
       expect((await t.runAsync(LocalDb.labResults))!, isEmpty, reason: bad);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text(bad), findsOneWidget);
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle();
     }
   });
 
@@ -336,6 +340,10 @@ void main() {
           findsOneWidget,
           reason: bad);
       expect((await t.runAsync(LocalDb.labResults))!, isEmpty, reason: bad);
+      expect(find.byType(AlertDialog), findsOneWidget);
+      expect(find.text(bad), findsOneWidget);
+      await t.tap(find.text('Cancel'));
+      await t.pumpAndSettle();
     }
   });
 }

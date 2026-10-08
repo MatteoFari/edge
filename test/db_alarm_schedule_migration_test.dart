@@ -75,7 +75,7 @@ void main() {
     final cols = await db.rawQuery('PRAGMA table_info(alarm_schedule)');
     final names = cols.map((c) => c['name'] as String).toSet();
     expect(names,
-        {'weekday', 'hour', 'minute', 'enabled', 'smart_window_minutes'});
+        {'weekday', 'hour', 'minute', 'enabled', 'smart_window_minutes', 'configured'});
     final weekdayCol = cols.firstWhere((c) => c['name'] == 'weekday');
     expect((weekdayCol['pk'] as num).toInt(), 1,
         reason: 'weekday must be the PRIMARY KEY');
@@ -177,4 +177,70 @@ void main() {
         reason: 'smart wake defaults OFF on an upgraded row — existing '
             'alarms keep firing exactly as before');
   });
+
+  test('backup restore retains disabled schedules and deleted-slot markers', () async {
+    const sourceName = 'alarm_configured_source_test.db';
+    const backupName = 'alarm_configured_backup_test.db';
+    const targetName = 'alarm_configured_restore_test.db';
+    created.addAll([sourceName, backupName, targetName]);
+    for (final name in [sourceName, backupName, targetName]) {
+      await databaseFactory.deleteDatabase(await _dbPath(name));
+    }
+    await _openThroughLocalDb(sourceName);
+    await LocalDb.setAlarmScheduleDay(
+      weekday: 0, hour: 7, minute: 0, enabled: false,
+    );
+    await LocalDb.setAlarmScheduleDay(
+      weekday: 1, hour: 7, minute: 0, enabled: false, configured: false,
+    );
+    final db = await LocalDb.instance;
+    final backupPath = await _dbPath(backupName);
+    await db.execute('VACUUM INTO ?', [backupPath]);
+    await _openThroughLocalDb(targetName);
+    final counts = await LocalDb.importFromDbFile(backupPath);
+    expect(counts['alarm_schedule'], 2);
+    final rows = await LocalDb.alarmScheduleRows();
+    expect(rows.firstWhere((r) => r['weekday'] == 0)['configured'], 1);
+    expect(rows.firstWhere((r) => r['weekday'] == 1)['configured'], 0);
+    expect(rows.every((r) => r['enabled'] == 0), isTrue);
+    expect(LocalDb.salvageTablesForTest, contains('alarm_schedule'));
+  });
+
+  for (final version in [58, LocalDb.schemaVersion]) {
+    test('upgrade/repair v$version keeps an off default-time alarm configured',
+        () async {
+      final name = 'alarm_configured_v${version}_test.db';
+      created.add(name);
+      final path = await _dbPath(name);
+      await databaseFactory.deleteDatabase(path);
+      final seed = await databaseFactory.openDatabase(path,
+          options: OpenDatabaseOptions(version: version, onCreate: (db, _) async {
+        await db.execute('''
+          CREATE TABLE alarm_schedule (
+            weekday INTEGER PRIMARY KEY,
+            hour INTEGER NOT NULL,
+            minute INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            smart_window_minutes INTEGER NOT NULL DEFAULT 0
+          )
+        ''');
+        await db.insert('alarm_schedule', {
+          'weekday': 0, 'hour': 7, 'minute': 0, 'enabled': 0,
+        });
+      }));
+      await seed.close();
+      expect(await _openThroughLocalDb(name), LocalDb.schemaVersion);
+      var rows = await LocalDb.alarmScheduleRows();
+      expect(rows.single['configured'], 1);
+      expect(rows.single['enabled'], 0);
+      await LocalDb.setAlarmScheduleDay(
+        weekday: 1, hour: 7, minute: 0, enabled: false, configured: false,
+      );
+      await LocalDb.close();
+      await LocalDb.instance;
+      rows = await LocalDb.alarmScheduleRows();
+      expect(rows.firstWhere((r) => r['weekday'] == 0)['configured'], 1);
+      expect(rows.firstWhere((r) => r['weekday'] == 1)['configured'], 0);
+    });
+  }
 }

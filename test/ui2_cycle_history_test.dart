@@ -8,6 +8,8 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:provider/provider.dart';
+import 'package:openstrap_edge/theme/theme_controller.dart';
 import 'package:openstrap_edge/ui2/screens/cycle_screen.dart';
 
 CycleData _data(List<String> starts, Map<String, double> rhrByDate) =>
@@ -185,9 +187,13 @@ void _screen() {
       t,
     ) async {
       await t.pumpWidget(
-        MaterialApp(
-          home: Scaffold(
-            body: ListView(children: [CycleTab(data: _threeCycles())]),
+        ChangeNotifierProvider(
+          create: (_) =>
+              ThemeController.seed(AppThemeChoice.light, Brightness.light),
+          child: MaterialApp(
+            home: Scaffold(
+              body: ListView(children: [CycleTab(data: _threeCycles())]),
+            ),
           ),
         ),
       );

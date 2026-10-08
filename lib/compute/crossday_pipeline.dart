@@ -19,6 +19,7 @@ import 'dart:math' as math;
 import 'package:openstrap_analytics/onehz.dart' as ana;
 
 import '../data/day_label.dart';
+import '../data/sleep_plan_reference.dart';
 
 // Pure string helper only (the `need_input:name=…` note grammar) — no DB, no
 // IO, no Flutter binding, so importing it does not compromise this file's
@@ -374,21 +375,39 @@ Map<String, dynamic> buildCrossDayBundle(
           !needNoStrain.present)
       ? null
       : ((need.value!.needSec - needNoStrain.value!.needSec) / 60).round();
-  // last night's TST (sec) for performance. Today's row carries the main sleep
-  // that ended this morning; `_lastNum` reached back to an older night when
-  // last night had none, and scored that as last night's performance.
+  // Performance belongs to this completed night, with the target committed
+  // BEFORE its onset. Tonight's need can change without rewriting that result.
   final lastTstMin = _todayNum(days, 'tst_min');
-  final perf = (need.present && lastTstMin != null)
-      ? ana.sleepPerformance(lastTstMin * 60.0, need.value!.needSec)
+  final todayRows = days.where((d) => d['is_today'] == true).toList();
+  final night = todayRows.length == 1 ? todayRows.single : null;
+  final nightReference = sleepPlanReference(night?['sleep_plan_reference'],
+      (night?['onset_sec'] as num?)?.toInt(),
+      nightDay: (night?['date'] as String?) ?? '');
+  final nightTarget = (nightReference?['need_sec'] as num?)?.toDouble();
+  final completeNight = night?['sleep_complete'] == true &&
+      night?['unsettled'] != true;
+  final perf = (completeNight && nightTarget != null && lastTstMin != null)
+      ? ana.sleepPerformance(lastTstMin * 60.0, nightTarget)
       : ana.Metric<ana.SleepPerformance>.absent(
           tier: ana.Tier.estimate,
-          inputs_used: const ['tst', 'sleep_need'],
-          // Name the input that is actually missing. When it is the need
-          // itself, carry the need's own reason forward rather than restating
-          // it as "no sleep need" — that would name a sibling metric, which is
-          // the failure this whole convention exists to stop.
-          note: need.present ? needInputNote('tst_min') : need.note,
+          inputs_used: const ['complete_tst', 'prospective_sleep_target'],
+          note: !completeNight ? needInputNote('complete_tst')
+              : needInputNote('prospective_sleep_target'),
         );
+  // A target belongs to the next canonical night, independently of the order
+  // in which days finish deriving. Missing nights cannot shift it forward.
+  // Settled bounds identify the episode; full capture is separately required
+  // above to compare its observed sleep with a target.
+  final settledNights = days.where((d) => d['sleep_episode_settled'] == true &&
+      d['unsettled'] != true &&
+      d['date'] is String && d['onset_sec'] is num && d['wake_sec'] is num &&
+      (d['wake_sec'] as num) > (d['onset_sec'] as num)).toList()
+    ..sort((a, b) => (b['wake_sec'] as num).compareTo(a['wake_sec'] as num));
+  final referenceNight = settledNights.isEmpty ? null : settledNights.first;
+  final referenceDay = referenceNight?['date'] as String?;
+  final referenceEnd = referenceDay == null ? null : localDayEndSec(referenceDay);
+  final targetDay = referenceEnd == null ? null :
+      dayLabelOf(DateTime.fromMillisecondsSinceEpoch(referenceEnd * 1000));
   // typical wake clock-minute + efficiency from recent days (medians).
   final wakeMins = <double>[
     for (final d in days)
@@ -539,6 +558,11 @@ Map<String, dynamic> buildCrossDayBundle(
       // worth up to 45 min of need.
       'strain_bonus_min': appliedStrainBonusMin,
       'performance': perf.toJson((v) => v.toJson()),
+      'performance_day': night?['date'],
+      'reference_night_day': referenceDay,
+      'reference_night_onset_sec': referenceNight?['onset_sec'],
+      'reference_night_wake_sec': referenceNight?['wake_sec'],
+      'target_day': targetDay,
       'bedtime': bedtime.toJson((v) => v.toJson()),
       'wake': wakeRec.toJson((v) => v.toJson()),
     },

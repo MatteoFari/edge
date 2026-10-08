@@ -1,3 +1,5 @@
+import '../l10n/app_localizations.dart';
+
 // Metric — the canonical {value, unit, confidence, tier, label, inputs_used}
 // shape every backend metric returns (see CONFIDENCE.md §6). Parsed defensively:
 // the backend is finalized in parallel, so any field may be missing.
@@ -163,9 +165,10 @@ int? needMoreNightsFromNote(String? note) {
 /// [unit] picks the wording: 'nights' (sleep/recovery/HRV-baseline metrics) →
 /// "Need N more nights"; 'days' (activity/fitness) → "Wear N more days to
 /// unlock". Returns null when [note] isn't a need_baseline note.
-String? needMessageFromNote(String? note, {String unit = 'nights'}) {
+String? needMessageFromNote(String? note, {String unit = 'nights', AppLocalizations? l}) {
   final n = needMoreNightsFromNote(note);
   if (n == null) return null;
+  if (l != null) return unit == 'days' ? l.metricNeedDays(n) : l.metricNeedNights(n);
   if (unit == 'days') {
     return 'Wear $n more day${n == 1 ? '' : 's'} to unlock';
   }
@@ -211,6 +214,8 @@ const _inputWhy = {
       'Today has not produced any activity to read yet — nothing has reached '
           'the app for it.',
   'tst_min': 'That night has no total sleep time behind it.',
+  'complete_tst': 'The sleep recording for that night is incomplete.',
+  'prospective_sleep_target': 'No sleep target was saved before this night began.',
   'wake_time': 'That night has no wake time behind it.',
   'efficiency': 'That night has no sleep efficiency behind it.',
   'observed_ceiling':
@@ -243,18 +248,21 @@ const _inputWhy = {
 /// which is the whole point. Inventing a plausible cause is the defect this
 /// exists to stop: a false diagnosis with an unactionable fix costs more trust
 /// than a bare absence, because the user does the thing and nothing happens.
-String? whyFromNote(String? note, {String unit = 'nights'}) {
+String? whyFromNote(String? note, {String unit = 'nights', AppLocalizations? l}) {
   final s = note?.trim() ?? '';
   if (s.isEmpty) return null;
-  final need = needMessageFromNote(s, unit: unit);
+  final need = needMessageFromNote(s, unit: unit, l: l);
   if (need != null) return need;
   if (s.startsWith('need_input:')) {
-    final why = _inputWhy[_noteInput.firstMatch(s)?.group(1)];
+    final key = _noteInput.firstMatch(s)?.group(1);
+    final fallback = _inputWhy[key];
+    final why = fallback == null ? null : (l?.noteInputReason(key!) ?? fallback);
     if (why == null) return null;
     final c = _noteCounts.firstMatch(s);
-    return c == null ? why : '$why There were ${c[1]}, and it needs ${c[2]}.';
+    return c == null ? why : (l?.noteInputCounts(why, c[1]!, c[2]!) ?? '$why There were ${c[1]}, and it needs ${c[2]}.');
   }
   if (s.startsWith('unknown_device_family')) {
+    if (l != null) return l.noteUnknownDeviceFamily;
     return 'These recordings are not stamped with which strap made them, and '
         'this number has to be calibrated per strap, so it is withheld rather '
         'than guessed.';
@@ -262,7 +270,22 @@ String? whyFromNote(String? note, {String unit = 'nights'}) {
   // The pipeline's own "we could not attribute this" marker. It exists so an
   // absence never has to borrow a plausible reason, so it renders as no reason.
   if (s == 'unknown_cause') return null;
-  return _machineNote.hasMatch(s) ? null : s;
+  return _machineNote.hasMatch(s) ? null : localizedMetricReason(s, l);
+}
+
+/// Known app-authored metric prose. Unrecognized/user text remains verbatim.
+String? localizedMetricReason(String? text, AppLocalizations? l) {
+  if (text == null || l == null) return text;
+  if (text == 'Last night is still being worked out.') return l.homeOvernightBuilding;
+  if (text == 'Nothing from last night has reached the app yet.') return l.homeOvernightNothingYet;
+  String metric(String name) => name == 'recovery' ? l.homeRingRecovery.toLowerCase() : l.readinessDetailTitle.toLowerCase();
+  final short = RegExp(r'^Needs (\d+) more nights? before (readiness|recovery) can score\.$').firstMatch(text);
+  if (short != null) return l.readinessNeedNights(int.parse(short[1]!), metric(short[2]!));
+  final consistent = RegExp(r'^Needs more consistently measured nights before (readiness|recovery) can score\.$').firstMatch(text);
+  if (consistent != null) return l.readinessNeedConsistent(metric(consistent[1]!));
+  final unstable = RegExp(r"^Today's (readiness|recovery) looked too extreme to trust against your own history, so it was held back rather than shown\.$").firstMatch(text);
+  if (unstable != null) return l.readinessUnstableReason(metric(unstable[1]!));
+  return text;
 }
 
 /// Pull a per-metric flag map ({c, tier, label, beta}) out of a row's `flags`

@@ -11,8 +11,10 @@
 // does not becomes NULL — never a paraphrase, never the raw token on screen.
 
 import 'dart:io';
+import 'dart:ui' show Locale;
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:openstrap_edge/l10n/app_localizations.dart';
 import 'package:openstrap_edge/models/metric.dart';
 
 void main() {
@@ -59,6 +61,24 @@ void main() {
           endsWith('There were 12, and it needs 20.'));
     });
 
+    test('complete sleep time requires a complete recording, not better sleep', () {
+      const note = 'need_input:name=complete_tst';
+      expect(whyFromNote(note), 'The sleep recording for that night is incomplete.');
+      expect(whyFromNote(note, l: lookupAppLocalizations(const Locale('en'))),
+          'The sleep recording for that night is incomplete.');
+      expect(whyFromNote(note, l: lookupAppLocalizations(const Locale('it'))),
+          'La registrazione del sonno di quella notte è incompleta.');
+    });
+
+    test('a missing prospective target is a missing saved plan', () {
+      const note = 'need_input:name=prospective_sleep_target';
+      expect(whyFromNote(note), 'No sleep target was saved before this night began.');
+      expect(whyFromNote(note, l: lookupAppLocalizations(const Locale('en'))),
+          'No sleep target was saved before this night began.');
+      expect(whyFromNote(note, l: lookupAppLocalizations(const Locale('it'))),
+          'Non era stato salvato un obiettivo di sonno prima dell’inizio di questa notte.');
+    });
+
     // The map degrades SILENTLY: a name with no sentence renders as "we do not
     // know", which is safe and says nothing. This is what notices.
     test('every need_input name lib/ emits has a sentence', () {
@@ -76,6 +96,11 @@ void main() {
             reason: 'no sentence for "$name" — add one to _inputWhy in '
                 'lib/models/metric.dart, or every screen it reaches says it '
                 'does not know why');
+        for (final code in ['en', 'it']) {
+          expect(whyFromNote('need_input:name=$name',
+              l: lookupAppLocalizations(Locale(code))), isNotEmpty,
+              reason: 'missing $code explanation for "$name"');
+        }
       }
     });
 

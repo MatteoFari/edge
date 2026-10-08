@@ -18,6 +18,10 @@ class AlarmScheduleEntry {
   final int minute;
   final bool enabled;
 
+  /// A saved alarm owns its weekday even when disabled at the default time.
+  /// False marks an unused slot or a deletion tombstone, not an alarm entry.
+  final bool configured;
+
   /// Smart Wake Window, minutes. 0 = off (the default — plain fixed-time
   /// alarm, unchanged behaviour). When > 0, `hour`:`minute` stays exactly what
   /// it always was — the band's own armed SET_ALARM, the hard fallback — and
@@ -31,6 +35,7 @@ class AlarmScheduleEntry {
     required this.hour,
     required this.minute,
     this.enabled = true,
+    this.configured = true,
     this.smartWindowMinutes = 0,
   });
 
@@ -38,6 +43,7 @@ class AlarmScheduleEntry {
     int? hour,
     int? minute,
     bool? enabled,
+    bool? configured,
     int? smartWindowMinutes,
   }) =>
       AlarmScheduleEntry(
@@ -45,6 +51,7 @@ class AlarmScheduleEntry {
         hour: hour ?? this.hour,
         minute: minute ?? this.minute,
         enabled: enabled ?? this.enabled,
+        configured: configured ?? this.configured,
         smartWindowMinutes: smartWindowMinutes ?? this.smartWindowMinutes,
       );
 
@@ -54,6 +61,7 @@ class AlarmScheduleEntry {
         hour: row['hour'] as int,
         minute: row['minute'] as int,
         enabled: (row['enabled'] as int) != 0,
+        configured: ((row['configured'] as int?) ?? 1) != 0,
         smartWindowMinutes: (row['smart_window_minutes'] as int?) ?? 0,
       );
 
@@ -64,16 +72,18 @@ class AlarmScheduleEntry {
       other.hour == hour &&
       other.minute == minute &&
       other.enabled == enabled &&
+      other.configured == configured &&
       other.smartWindowMinutes == smartWindowMinutes;
 
   @override
   int get hashCode =>
-      Object.hash(weekday, hour, minute, enabled, smartWindowMinutes);
+      Object.hash(weekday, hour, minute, enabled, configured, smartWindowMinutes);
 
   @override
   String toString() =>
       'AlarmScheduleEntry(weekday: $weekday, hour: $hour, minute: $minute, '
-      'enabled: $enabled, smartWindowMinutes: $smartWindowMinutes)';
+      'enabled: $enabled, configured: $configured, '
+      'smartWindowMinutes: $smartWindowMinutes)';
 }
 
 /// Whether a smart-wake early-fire attempt should happen right now.
@@ -126,9 +136,9 @@ const int defaultAlarmMinute = 0;
 
 /// Exactly 7 entries, one per weekday, in weekday order (index == weekday). A
 /// weekday absent from [stored] gets [defaultAlarmHour]:[defaultAlarmMinute],
-/// disabled. This is the ONE place "unconfigured" and "configured but off"
-/// are made to look the same to every caller (the UI always renders 7 rows;
-/// [nextAlarmOccurrence] only ever sees a fully-populated list).
+/// disabled and unconfigured. Saved disabled alarms keep their configured
+/// state, so the editor can distinguish them from unused slots while
+/// [nextAlarmOccurrence] still receives a fully-populated list.
 List<AlarmScheduleEntry> fillDefaultAlarmSchedule(
   List<AlarmScheduleEntry> stored,
 ) {
@@ -141,6 +151,7 @@ List<AlarmScheduleEntry> fillDefaultAlarmSchedule(
             hour: defaultAlarmHour,
             minute: defaultAlarmMinute,
             enabled: false,
+            configured: false,
           ),
   ];
 }

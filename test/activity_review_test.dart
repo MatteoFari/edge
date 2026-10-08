@@ -5,6 +5,7 @@ import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:openstrap_edge/data/activity_store.dart';
 import 'package:openstrap_edge/data/db.dart';
@@ -17,8 +18,19 @@ import 'package:openstrap_edge/notify/notification_event.dart';
 import 'package:openstrap_edge/notify/notification_prefs.dart';
 import 'package:openstrap_edge/notify/tap_router.dart';
 
+class _Paths extends PathProviderPlatform {
+  _Paths(this.path);
+  final String path;
+  @override
+  Future<String?> getApplicationDocumentsPath() async => path;
+}
+
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
   late Database db;
+  late Directory testDirectory;
+  late String previousDbName;
+  late PathProviderPlatform previousPaths;
   late ActivityStore store;
   late LocalRepositoryImpl repo;
   final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
@@ -38,10 +50,11 @@ void main() {
   });
   setUp(() async {
     await LocalDb.close();
-    LocalDb.dbName = 'activity_review_test.db';
-    await databaseFactory.deleteDatabase(
-      p.join(await databaseFactory.getDatabasesPath(), LocalDb.dbName),
-    );
+    previousDbName = LocalDb.dbName;
+    previousPaths = PathProviderPlatform.instance;
+    testDirectory = await Directory.systemTemp.createTemp('activity_review_');
+    PathProviderPlatform.instance = _Paths(testDirectory.path);
+    LocalDb.dbName = p.join(testDirectory.path, 'activity_review_test.db');
     db = await LocalDb.instance;
     await db.update('activity_review_meta', {'activated_at': start - 1});
     store = ActivityStore(db);
@@ -49,9 +62,9 @@ void main() {
   });
   tearDown(() async {
     await LocalDb.close();
-    await databaseFactory.deleteDatabase(
-      p.join(await databaseFactory.getDatabasesPath(), LocalDb.dbName),
-    );
+    LocalDb.dbName = previousDbName;
+    PathProviderPlatform.instance = previousPaths;
+    await testDirectory.delete(recursive: true);
   });
 
   Future<ActivitySuggestion> detectNap() async =>

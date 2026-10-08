@@ -589,11 +589,71 @@ void _wiredFamilies() {
       expect((coach['performance'] as Map)['value'], '—');
     });
 
-    test('TST last night → scored', () {
+    test('target ownership follows the settled night across local DST and gaps', () {
+      for (final day in ['2026-03-28', '2026-10-24']) {
+        final date = DateTime.parse(day);
+        final onset = DateTime(date.year, date.month, date.day - 1, 23)
+            .millisecondsSinceEpoch ~/ 1000;
+        final wake = DateTime(date.year, date.month, date.day, 7)
+            .millisecondsSinceEpoch ~/ 1000;
+        final days = <Map<String, dynamic>>[
+          {'date': day, 'onset_sec': onset, 'wake_sec': wake,
+            'sleep_episode_settled': true},
+          // A later missing/unsettled night cannot move the owner forward.
+          {'date': '2026-11-01', 'onset_sec': wake + 1000, 'wake_sec': wake + 2000,
+            'sleep_episode_settled': false},
+        ];
+        final coach = buildCrossDayBundle(days, const {})['sleep_coach'] as Map;
+        expect(coach['reference_night_day'], day);
+        expect(coach['reference_night_wake_sec'], wake);
+        expect(coach['target_day'], day == '2026-03-28' ? '2026-03-29' : '2026-10-25');
+      }
+    });
+
+    test('TST and a prospective target last night → scored', () {
       final days = _synthDays(30);
       days.last['is_today'] = true;
+      days.last['sleep_complete'] = true;
+      days.last['sleep_plan_reference'] = {
+        'model': 'observed_sleep_target_v1', 'need_sec': 8 * 3600,
+        'built_at_epoch': 82000, 'committed_at_epoch': 82001,
+        'target_day': days.last['date'],
+      };
       final coach = (buildCrossDayBundle(days, const {})['sleep_coach'] as Map);
       expect((coach['performance'] as Map)['value'], isA<Map>());
+    });
+
+    test('an unsettled night or absent target cannot be scored', () {
+      final days = _synthDays(30);
+      days.last['is_today'] = true;
+      days.last['sleep_complete'] = true;
+      var coach = buildCrossDayBundle(days, const {})['sleep_coach'] as Map;
+      expect((coach['performance'] as Map)['value'], '—');
+      days.last['sleep_plan_reference'] = {
+        'model': 'observed_sleep_target_v1', 'need_sec': 8 * 3600,
+        'built_at_epoch': 82000, 'committed_at_epoch': 82001,
+        'target_day': days.last['date'],
+      };
+      days.last['unsettled'] = true;
+      coach = buildCrossDayBundle(days, const {})['sleep_coach'] as Map;
+      expect((coach['performance'] as Map)['value'], '—');
+    });
+
+    test('changing next sleep target cannot change completed-night performance', () {
+      final days = _synthDays(30);
+      days.last.addAll({'is_today': true, 'sleep_complete': true,
+        'strain': 0, 'nap_min': 0, 'sleep_plan_reference': {
+          'model': 'observed_sleep_target_v1', 'need_sec': 8 * 3600,
+          'built_at_epoch': 82000, 'committed_at_epoch': 82001,
+          'target_day': days.last['date'],
+        }});
+      final before = buildCrossDayBundle(days, const {})['sleep_coach'] as Map;
+      days.last['strain'] = 21;
+      days.last['nap_min'] = 20;
+      final after = buildCrossDayBundle(days, const {})['sleep_coach'] as Map;
+      expect(after['need'], isNot(before['need']));
+      expect(after['performance'], before['performance']);
+      expect((after['performance'] as Map)['value']['pct'], 93.75);
     });
   });
 

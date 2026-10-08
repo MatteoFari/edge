@@ -437,9 +437,10 @@ class _RoughNightCardState extends State<RoughNightCard> {
     // "a rougher night than usual for you — your body worked harder overnight"
     // splits at the dash into a headline and its own explanation.
     final dash = n.descriptor.indexOf('—');
-    final head =
+    final rawHead =
         dash < 0 ? n.descriptor : n.descriptor.substring(0, dash).trim();
 
+    final head = rawHead == 'a rougher night than usual for you' ? (l?.roughNightMeasuredHeadline ?? rawHead) : rawHead;
     return Surface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -547,7 +548,7 @@ class _RoughNightCardState extends State<RoughNightCard> {
               () => _picked.contains(t) ? _picked.remove(t) : _picked.add(t),
             ),
             child: Pill(
-              t,
+              journalTagLabel(t, l),
               _picked.contains(t) ? C.domMind : C.n400,
               icon: _picked.contains(t) ? LucideIcons.check : null,
             ),

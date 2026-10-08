@@ -114,8 +114,8 @@ class _ProfileSetupViewState extends State<ProfileSetupView> {
   Future<void> _continue() async {
     final bad = [
       if (Typed.of(_age.text).bad) 'Age',
-      if (Typed.of(_height.text).bad) _u.heightLabel,
-      if (Typed.of(_weight.text).bad) _u.weightLabel,
+      if (Typed.of(_height.text).bad) _u.localizedHeightLabel(AppLocalizations.of(context)),
+      if (Typed.of(_weight.text).bad) _u.localizedWeightLabel(AppLocalizations.of(context)),
     ];
     if (bad.isNotEmpty) {
       sayUnreadable(context, bad);
@@ -220,7 +220,7 @@ class _Choice extends StatelessWidget {
         padding: const EdgeInsets.symmetric(horizontal: S.x2, vertical: S.x2),
         decoration: BoxDecoration(
           color: on ? p.wash(C.green) : p.card,
-          borderRadius: R.rMd,
+          borderRadius: R.controlOf(c),
           border: Border.all(color: on ? p.on(C.green) : p.line),
         ),
         child: Text(label,

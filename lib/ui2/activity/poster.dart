@@ -36,9 +36,11 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../../l10n/presentation.dart';
 import '../../state/clock_format.dart' show formatClockOf;
 import '../../state/units_controller.dart';
 import '../screens/home_screen.dart' show unitsOf;
+import '../onboarding/profile_setup.dart' show formatDay;
 import '../theme.dart';
 import 'share.dart' show shareHero, shareStats;
 import 'summary.dart';
@@ -157,6 +159,7 @@ class PosterCard extends StatelessWidget {
   Widget build(BuildContext c) {
     final p = P.of(c);
     final u = unitsOf(c);
+    final l = AppLocalizations.of(c);
     final accent = r.activity.color;
     // Everything the session can honestly print. No picker, no subset: the
     // one question a share sheet asked that nobody has a reason to answer
@@ -272,7 +275,7 @@ class PosterCard extends StatelessWidget {
                 top: 0,
                 bottom: 0,
                 width: kPosterColW,
-                child: _column(accent, stats, posterHero(r, u)),
+                child: _column(accent, stats, posterHero(r, u), l),
               ),
               // The credit. On the card because the map is on the card, and
               // absent when no tiles are DRAWN — crediting OpenStreetMap for
@@ -307,6 +310,7 @@ class PosterCard extends StatelessWidget {
     Color accent,
     List<(String, String)> stats,
     (String, String, String) hero,
+    AppLocalizations? l,
   ) =>
       Padding(
         padding: EdgeInsets.fromLTRB(
@@ -316,7 +320,7 @@ class PosterCard extends StatelessWidget {
           children: [
             _wordmark(accent),
             SizedBox(height: _compact ? S.x2 : S.x4),
-            _activity(accent),
+            _activity(accent, l),
             const SizedBox(height: S.x2),
             _hero(hero),
             // The slack lives here, so the stats and the stamp stay pinned to
@@ -324,9 +328,9 @@ class PosterCard extends StatelessWidget {
             // not in this column at all — it is behind everything, or in the
             // opposite corner.
             const Spacer(),
-            _statGrid(accent, stats),
+            _statGrid(accent, stats, l),
             if (stats.isNotEmpty) SizedBox(height: _compact ? S.x2 : S.x3),
-            _stamp(accent),
+            _stamp(accent, l),
           ],
         ),
       );
@@ -353,12 +357,12 @@ class PosterCard extends StatelessWidget {
 
   /// The activity, set large. It is the card's subject — what this picture is
   /// OF — and it spent a long time as an 11pt caption next to a 48pt number.
-  Widget _activity(Color accent) => Row(children: [
+  Widget _activity(Color accent, AppLocalizations? l) => Row(children: [
         Flexible(
           child: FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(r.activity.name.toUpperCase(),
+            child: Text(r.activity.label(l).toUpperCase(),
                 style: F.n17.copyWith(color: accent, letterSpacing: .6),
                 maxLines: 1),
           ),
@@ -403,7 +407,7 @@ class PosterCard extends StatelessWidget {
   /// part that does not survive the width, so the cell drops it and keeps what
   /// carries the meaning: the name above the number, same caps, same muted
   /// label, same tabular value. Nothing else on the card changes shape.
-  Widget _statGrid(Color accent, List<(String, String)> stats) => Column(
+  Widget _statGrid(Color accent, List<(String, String)> stats, AppLocalizations? l) => Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           for (var i = 0; i < stats.length; i += _statCols) ...[
@@ -417,7 +421,7 @@ class PosterCard extends StatelessWidget {
                   if (j > 0) const SizedBox(width: S.x3),
                   Expanded(
                     child: i + j < stats.length
-                        ? _statCell(stats[i + j], accent)
+                        ? _statCell(stats[i + j], accent, l)
                         : const SizedBox.shrink(),
                   ),
                 ],
@@ -427,7 +431,7 @@ class PosterCard extends StatelessWidget {
         ],
       );
 
-  Widget _statCell((String, String) s, Color accent) {
+  Widget _statCell((String, String) s, Color accent, AppLocalizations? l) {
     final (value, unit) = splitStatUnit(s.$2);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -441,7 +445,7 @@ class PosterCard extends StatelessWidget {
         FittedBox(
           fit: BoxFit.scaleDown,
           alignment: Alignment.centerLeft,
-          child: Text(s.$1.toUpperCase(),
+          child: Text(activityStatLabel(s.$1, l).toUpperCase(),
               style: F.over
                   .copyWith(color: accent, letterSpacing: 1.1, height: 1.2),
               maxLines: 1),
@@ -473,7 +477,7 @@ class PosterCard extends StatelessWidget {
     );
   }
 
-  Widget _stamp(Color accent) => Row(children: [
+  Widget _stamp(Color accent, AppLocalizations? l) => Row(children: [
         Icon(LucideIcons.calendar, size: 11, color: accent),
         const SizedBox(width: S.x2),
         // The longest string on the card relative to its slot — it shrinks to
@@ -482,7 +486,7 @@ class PosterCard extends StatelessWidget {
           child: FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(posterDate(r.start),
+            child: Text(posterDate(r.start, l),
                 style: F.over.copyWith(color: C.white, letterSpacing: 0),
                 maxLines: 1),
           ),
@@ -553,7 +557,7 @@ class PosterStatRow extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(label.toUpperCase(),
+            Text(activityStatLabel(label, AppLocalizations.of(c)).toUpperCase(),
                 style: F.over.copyWith(color: muted, letterSpacing: 1),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),
@@ -922,12 +926,12 @@ void drawPin(Canvas canvas, Offset o, Color col) {
 }
 
 /// `May 20, 2026 • 7:15 AM` (or `07:15`), in the reader's own clock terms.
-String posterDate(DateTime t) {
+String posterDate(DateTime t, [AppLocalizations? l]) {
   const m = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
     'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
   ];
-  return '${m[t.month - 1]} ${t.day}, ${t.year} • ${formatClockOf(t)}';
+  return l == null ? '${m[t.month - 1]} ${t.day}, ${t.year} • ${formatClockOf(t)}' : '${formatDay(t, l)} ${t.year} • ${formatClockOf(t)}';
 }
 
 /// Hero, unit, caption — distance when the session has one, time when it does

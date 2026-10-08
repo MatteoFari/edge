@@ -222,6 +222,25 @@ abstract class LocalRepository {
   // ── workouts (manual / live / auto) ──────────────────────────────────────────
   Future<Map<String, dynamic>> getWorkouts({String range = 'month'}) =>
       throw UnimplementedError('re-layer: getWorkouts');
+
+  /// Recorded history within absolute bounds. The upper bound is exclusive,
+  /// allowing callers to use the next local midnight on DST days.
+  Future<Map<String, dynamic>> getWorkoutHistory({
+    required int fromTs,
+    required int untilTs,
+  }) async {
+    final history = await getWorkouts(range: 'all');
+    final rows = history['workouts'];
+    return {
+      'workouts': [
+        if (rows is List)
+          for (final row in rows)
+            if (row is Map && row['start_ts'] is num &&
+                (row['start_ts'] as num) >= fromTs &&
+                (row['start_ts'] as num) < untilTs) row,
+      ],
+    };
+  }
   Future<Map<String, dynamic>> getWorkout(String id) =>
       throw UnimplementedError('re-layer: getWorkout');
   Future<void> deleteWorkout(String id) =>

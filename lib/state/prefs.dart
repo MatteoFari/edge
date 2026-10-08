@@ -21,7 +21,9 @@ class Prefs {
   static Future<void> ensureLoaded() async {
     try {
       _sp ??= await SharedPreferences.getInstance();
-    } catch (_) {/* reads fall back to defaults */}
+    } catch (_) {
+      /* reads fall back to defaults */
+    }
   }
 
   /// Whether storage is actually available, i.e. whether a `getX` default is
@@ -78,10 +80,13 @@ class Prefs {
   static const String shellTab = 'ui.shell_tab';
   static const String recapRange = 'ui.recap_range';
   static const String workoutsRange = 'ui.workouts_range';
+  static const String homeAiBriefing = 'ui.home_ai_briefing';
 
   /// Automatic local backup: the chosen cadence, and when one last ran.
   static const String backupCadence = 'backup.cadence';
   static const String backupLastRunMs = 'backup.last_run_ms';
+  static const String backupFolder = 'backup.folder';
+  static const String backupLastError = 'backup.last_error';
 
   /// Developer mode. Off unless somebody deliberately turned it on — it is a
   /// tool for us, not a feature, so it has no switch in the normal settings

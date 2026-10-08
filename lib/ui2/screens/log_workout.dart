@@ -256,10 +256,12 @@ class _LogWorkoutState extends State<LogWorkout> {
       isScrollControlled: true,
       sheetAnimationStyle: sheetMotion(context),
       backgroundColor: P.of(context).card,
-      shape: const RoundedRectangleBorder(borderRadius: R.rXl),
+      shape: RoundedRectangleBorder(
+        borderRadius: P.of(context).expressive ? R.rXxl : R.rXl,
+      ),
       builder: (_) => const _TypeSheet(),
     );
-    if (picked != null) setState(() => _activity = picked);
+    if (mounted && picked != null) setState(() => _activity = picked);
   }
 
   Future<void> _save() async {
@@ -444,7 +446,7 @@ class _TypeSheetState extends State<_TypeSheet> {
         ? allActivities
         : [
             for (final a in allActivities)
-              if (a.name.toLowerCase().contains(q)) a,
+              if (a.matches(q, AppLocalizations.of(c))) a,
           ];
     return SafeArea(
       child: Padding(
@@ -482,7 +484,7 @@ class _TypeSheetState extends State<_TypeSheet> {
                     itemCount: items.length,
                     itemBuilder: (_, i) {
                       final a = items[i];
-                      return SetRow(a.icon, a.color, a.name,
+                      return SetRow(a.icon, a.color, a.label(l),
                           chevron: false,
                           onTap: () => Navigator.of(c).pop(a));
                     },

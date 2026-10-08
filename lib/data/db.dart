@@ -27,6 +27,7 @@ import '../compute/substrate.dart' show beatTimesMs;
 // version, which every day_result read applies as a CEILING (see [dayResult]).
 // `show` keeps the rest of the engine out of this namespace.
 import '../coach/coach_db.dart' show CoachDb;
+import '../coach/coach_store.dart' show CoachStore;
 import '../compute/derivation_engine.dart' show kAlgoVersion, kOvernightGiveUpSec, overnightSettled;
 import '../compute/sleep_profile_policy.dart' show SleepProfilePolicy;
 import '../ble/adapters/adapter.dart' show NeutralSample;
@@ -40,6 +41,7 @@ import '../compute/accepted_naps.dart';
 import '../compute/nap_edits.dart' show NapEditKind;
 import '../compute/vendor_sleep.dart' show VendorEpoch, VendorNight;
 import 'journal_fields.dart';
+import 'weight_store.dart';
 import 'live_coverage_policy.dart';
 import 'step_calibration.dart';
 import 'med_store.dart';
@@ -47,6 +49,7 @@ import 'models.dart';
 import 'nutrition_store.dart';
 import 'observation.dart';
 import 'series_codec.dart';
+import 'sleep_plan_reference.dart';
 
 /// The outcome of a database rebuild: why the old file would not open, where it
 /// was parked, and how many rows came back per table.
@@ -178,6 +181,10 @@ class LocalDb {
     // primary row is skipped by the merge, as on a restore.
     'device',
     // Hand-entered. The only copy that exists anywhere.
+    'coach_legacy',
+    'coach_chat',
+    'coach_preferences',
+    'coach_memory',
     'journal',
     'journal_metric',
     'journal_field_def',
@@ -189,6 +196,7 @@ class LocalDb {
     'food_def',
     'med_def',
     'med_dose',
+    'alarm_schedule',
     'cycle_log',
     'cycle_symptom',
     'sleep_override',
@@ -214,6 +222,7 @@ class LocalDb {
     // The only copy of what a paired sensor measured during a session.
     'external_hr',
     'imported_measurement',
+    'imported_weight',
     // User-initiated ECG readings and the band's raw ECG records recovered
     // through history — the band trims its flash on ACK, so these too are
     // the only copy. Parent before child.
@@ -383,7 +392,7 @@ class LocalDb {
   /// pass it: sqflite throws `ArgumentError('onCreate must be null if no
   /// version is specified')` BEFORE opening anything when `onCreate` is given
   /// without `version` (sqflite_common database_mixin.dart).
-  static const int schemaVersion = 58;
+  static const int schemaVersion = 61;
 
   /// SQLite caps host parameters per statement (`SQLITE_MAX_VARIABLE_NUMBER` —
   /// only 999 on the builds shipped with older Android/iOS). Any `IN (?, ?, …)`
@@ -478,6 +487,8 @@ class LocalDb {
       onCreate: (db, version) async {
         await _createSamples(db);
         await _createDecodedStore(db);
+        await WeightStore.create(db);
+        await CoachStore.create(db);
         await db.execute('CREATE INDEX idx_samples_ts ON samples(ts)');
         await _createEvents(db);
         await _createBandSignals(db);
@@ -1138,6 +1149,17 @@ class LocalDb {
           // A band's own hypnogram (`vendor_staged`). New table only.
           await _createVendorSleepEpoch(db);
         }
+        if (oldV < 59) {
+          await _createAlarmSchedule(db);
+          await _addColumnIfMissing(
+            db, 'alarm_schedule', 'configured', 'INTEGER NOT NULL DEFAULT 1',
+          );
+        }
+        if (oldV < 60) {
+          // Additive display-only weight ledger; no existing rows rewritten.
+          await WeightStore.create(db);
+        }
+        if (oldV < 61) await CoachStore.create(db);
       },
       onOpen: (db) async {
         await _repairOpenSchema(db);
@@ -1194,6 +1216,8 @@ class LocalDb {
     await _createSignalPriority(db);
     await _createExternalHr(db);
     await _createImportedMeasurement(db);
+    await WeightStore.create(db);
+    await CoachStore.create(db);
     // CREATE TABLE IF NOT EXISTS on the every-open repair path, and NO schema
     // version bump: this table is additive with no backfill, so the repair pass
     // creates it on a fresh install and on an existing one alike. Spending a
@@ -1228,6 +1252,9 @@ class LocalDb {
     await _addColumnIfMissing(
       db, 'alarm_schedule', 'smart_window_minutes',
       'INTEGER NOT NULL DEFAULT 0',
+    );
+    await _addColumnIfMissing(
+      db, 'alarm_schedule', 'configured', 'INTEGER NOT NULL DEFAULT 1',
     );
     await _createEcgTables(db);
     await _addColumnIfMissing(
@@ -1828,15 +1855,16 @@ class LocalDb {
         minute  INTEGER NOT NULL,
         enabled INTEGER NOT NULL DEFAULT 1,
         smart_window_minutes INTEGER NOT NULL DEFAULT 0,
+        configured INTEGER NOT NULL DEFAULT 1,
         PRIMARY KEY (weekday)
       )
     ''');
   }
 
-  /// Every configured weekday row, in no particular order — callers that care
+  /// Every saved weekday row, including unconfigured deletion markers — callers that care
   /// about weekday order (the UI, [nextAlarmOccurrence]) sort/fill it
-  /// themselves. A weekday absent from this list has never been configured;
-  /// it is NOT the same as a row with `enabled = 0`, and callers must not
+  /// themselves. An absent or unconfigured weekday has no saved alarm;
+  /// it is NOT the same as a configured row with `enabled = 0`, and callers must not
   /// collapse the two (see `AlarmScheduleEntry` / `fillDefaultAlarmSchedule`
   /// in state/alarm_schedule.dart, which is where that distinction is made).
   static Future<List<Map<String, Object?>>> alarmScheduleRows() async {
@@ -2188,19 +2216,38 @@ class LocalDb {
     required int minute,
     required bool enabled,
     int smartWindowMinutes = 0,
+    bool configured = true,
   }) async {
-    final db = await instance;
-    await db.insert(
-      'alarm_schedule',
+    await setAlarmScheduleDays([
       {
         'weekday': weekday,
         'hour': hour,
         'minute': minute,
         'enabled': enabled ? 1 : 0,
         'smart_window_minutes': smartWindowMinutes,
+        'configured': configured ? 1 : 0,
       },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+    ]);
+  }
+
+  /// Save one editor's affected weekdays together, preserving every other
+  /// slot. A failed write rolls back the whole draft.
+  static Future<List<Map<String, Object?>>> setAlarmScheduleDays(
+    List<Map<String, Object?>> rows, {
+    void Function(List<Map<String, Object?>>)? validateCurrent,
+  }) async {
+    final db = await instance;
+    return db.transaction((txn) async {
+      // Keep the draft's revision check under the same write lock as its save.
+      validateCurrent?.call(await txn.query('alarm_schedule'));
+      final batch = txn.batch();
+      for (final row in rows) {
+        batch.insert('alarm_schedule', row,
+            conflictAlgorithm: ConflictAlgorithm.replace);
+      }
+      await batch.commit(noResult: true);
+      return txn.query('alarm_schedule');
+    });
   }
 
   /// Wipe the whole weekly schedule — the "Cancel-all" half of disabling the
@@ -2388,13 +2435,16 @@ class LocalDb {
     required String source,
   }) async {
     final db = await instance;
-    await db.insert('sleep_override', {
-      'day_id': dayId,
-      'onset_ts': onsetTs,
-      'offset_ts': offsetTs,
-      'source': source,
-      'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
-    }, conflictAlgorithm: ConflictAlgorithm.replace);
+    await db.transaction((tx) async {
+      await tx.insert('sleep_override', {
+        'day_id': dayId,
+        'onset_ts': onsetTs,
+        'offset_ts': offsetTs,
+        'source': source,
+        'created_at': DateTime.now().millisecondsSinceEpoch ~/ 1000,
+      }, conflictAlgorithm: ConflictAlgorithm.replace);
+      await _markSleepPlanOverride(tx, dayId);
+    });
     await releaseFrozenHeadline(dayId);
   }
 
@@ -2422,7 +2472,11 @@ class LocalDb {
   /// Remove the override for [dayId] (revert to auto detection).
   static Future<void> deleteSleepOverride(String dayId) async {
     final db = await instance;
-    await db.delete('sleep_override', where: 'day_id = ?', whereArgs: [dayId]);
+    await db.transaction((tx) async {
+      await tx.delete('sleep_override', where: 'day_id = ?', whereArgs: [dayId]);
+      // A durable deletion tombstone also invalidates an in-flight preparation.
+      await _markSleepPlanOverride(tx, dayId);
+    });
     await releaseFrozenHeadline(dayId);
   }
 
@@ -2850,11 +2904,19 @@ class LocalDb {
 
   /// Imported workouts, newest first.
   static Future<List<Map<String, dynamic>>> importedWorkouts({
-    int limit = 200,
+    int? limit = 200,
+    int? sinceTs,
+    int? untilTs,
   }) async {
     final db = await instance;
+    final clauses = <String>[
+      if (sinceTs != null) 'start_ts >= ?',
+      if (untilTs != null) 'start_ts < ?',
+    ];
     return db.query(
       'imported_workout',
+      where: clauses.isEmpty ? null : clauses.join(' AND '),
+      whereArgs: [?sinceTs, ?untilTs],
       orderBy: 'start_ts DESC',
       limit: limit,
     );
@@ -3708,8 +3770,8 @@ class LocalDb {
   static const String kFrozenHeadlineCursor = 'frozen_headline';
 
   /// The pinned morning readiness headline (day + value), or null if unset /
-  /// unparseable. The `day` must be compared to today's label by the caller — a
-  /// pin left over from a previous day must NOT be surfaced.
+  /// unparseable. The `day` must match the date the caller is displaying — a
+  /// pin from a different day must NOT be surfaced.
   static Future<({String day, int value, int? wakeSec})?> frozenHeadline() async {
     final raw = await getCursor(kFrozenHeadlineCursor);
     if (raw == null || raw.isEmpty) return null;
@@ -7995,7 +8057,7 @@ class LocalDb {
   /// Upsert one (day_id, algo_version) result + its indexed scalars in one
   /// transaction. Immutable PER VERSION: a version bump writes a new row. The
   /// `finalized` flag locks a day from further recompute (~48 h after wake).
-  static Future<void> putDayResult({
+  static Future<bool> putDayResult({
     required String dayId,
     required int algoVersion,
     required String payloadJson,
@@ -8036,6 +8098,10 @@ class LocalDb {
     // migrated in by M3); this stores the readable string under that name
     // rather than renaming a shipped column.
     String? priorityHash,
+    // Captured BEFORE preparing this day's sleep window. Imports and retained
+    // patches omit it and cannot acknowledge an outstanding sleep correction.
+    int? sleepPlanOverrideRevision,
+    String? sleepPlanOverrideStamp,
   }) async {
     final db = await instance;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -8044,7 +8110,25 @@ class LocalDb {
     // no producer needs to know the wire format exists — upstream code keeps
     // merging and patching plain [{t,v}] lists in memory. Lossless or no-op:
     // SeriesCodec leaves anything it cannot encode exactly as it found it.
-    await db.transaction((txn) async {
+    return db.transaction((txn) async {
+      final planState = await _sleepPlanState(txn);
+      final revisions = Map<String, dynamic>.from(planState['override_days'] as Map);
+      final pending = Map<String, dynamic>.from(planState['pending_overrides'] as Map);
+      final requiredRevision = (revisions[dayId] as num?)?.toInt();
+      // Preparation reads the override before the worker runs. Reject old
+      // windows before ANY day/scalar write, including after a newer result
+      // already acknowledged the correction. The tombstone survives deletion.
+      if (requiredRevision != null && (sleepPlanOverrideRevision == null ||
+          sleepPlanOverrideRevision < requiredRevision)) {
+        return false;
+      }
+      if (sleepPlanOverrideStamp != null &&
+          sleepPlanOverrideStamp != await _sleepPlanOverrideStamp(txn, dayId)) {
+        // Restores can replace user rows without calling the editor setter.
+        // Make a changed source durable rather than publish an old preparation.
+        if (!pending.containsKey(dayId)) await _markSleepPlanOverride(txn, dayId);
+        return false;
+      }
       var reviewedPayload = payloadJson;
       var reviewedSeries = series;
       if (source == 'band') {
@@ -8073,6 +8157,11 @@ class LocalDb {
         'rmssd': rmssd,
         'readiness': readiness,
       }, conflictAlgorithm: ConflictAlgorithm.replace);
+      if (requiredRevision != null && !partial && !skipped) pending.remove(dayId);
+      planState['pending_overrides'] = pending;
+      planState['source_revision'] = (planState['source_revision'] as int) + 1;
+      planState['refresh_pending'] = true;
+      await _putSleepPlanState(txn, planState);
       // A `partial` row already doesn't count as "derived" for the raw-pruning
       // guard (see above) — extend the same caution to the rolling baselines:
       // don't let a day whose second-half compute failed/timed out overwrite
@@ -8110,6 +8199,7 @@ class LocalDb {
           }, conflictAlgorithm: ConflictAlgorithm.replace);
         }
       }
+      return true;
     });
   }
 
@@ -8387,7 +8477,8 @@ class LocalDb {
           "AND payload_json NOT LIKE '%\"imported\":true%'",
       whereArgs: [algoVersion],
     );
-    return {for (final r in rows) r['day_id'] as String};
+    final pending = await pendingSleepPlanOverrideDays();
+    return {for (final r in rows) if (!pending.contains(r['day_id'])) r['day_id'] as String};
   }
 
   /// Normalize a day_result row to also carry a `date` key (== day_id) so legacy
@@ -8404,6 +8495,7 @@ class LocalDb {
   /// (a corrupt export). VACUUM INTO also defragments, so the file is small.
   static Future<String> exportCopy() async {
     final db = await instance;
+    await CoachStore.migrateAllLegacy(db);
     final tmp = await getTemporaryDirectory();
     final stamp = DateTime.now().millisecondsSinceEpoch;
     final dest = p.join(tmp.path, 'openstrap_export_$stamp.db');
@@ -8536,6 +8628,7 @@ class LocalDb {
       onCreate: (db, _) async {
         await _createSamples(db);
         await _createDecodedStore(db);
+        await WeightStore.create(db);
         await db.execute('CREATE INDEX idx_samples_ts ON samples(ts)');
         await _createEvents(db);
         await _createBandSignals(db);
@@ -8715,6 +8808,9 @@ class LocalDb {
       );
       await copyRows('journal', where: 'date = ?', whereArgs: [dayId]);
       await copyRows('journal_metric', where: 'date = ?', whereArgs: [dayId]);
+      await copyRows('imported_weight',
+          where: 'time_ms >= ? AND time_ms < ?',
+          whereArgs: [startSec * 1000, endSec * 1000]);
       await copyRows('cycle_log', where: 'date = ?', whereArgs: [dayId]);
       await copyRows('notifications', where: 'date = ?', whereArgs: [dayId]);
       await copyRows(
@@ -8773,6 +8869,9 @@ class LocalDb {
           where: 'rec_ts >= ? AND rec_ts < ?',
           whereArgs: [startSec, endSec],
         );
+        deleted += await txn.delete('imported_weight',
+          where: 'time_ms >= ? AND time_ms < ?',
+          whereArgs: [startSec * 1000, endSec * 1000]);
         deleted += await txn.delete(
           'samples',
           where: 'ts >= ? AND ts < ?',
@@ -8835,9 +8934,29 @@ class LocalDb {
       await deleteByIn(txn, 'workout_suggestions', 'date', sorted);
       await deleteByIn(txn, 'sleep_override', 'day_id', sorted);
       await deleteByIn(txn, 'sleep_nap', 'day_id', sorted);
+      for (final day in sorted) {
+        await txn.delete('baselines', where: 'key LIKE ? OR key LIKE ?',
+            whereArgs: ['$_sleepTargetPrefix$day:%',
+              '$_sleepTargetPrefix%:$day:%']);
+      }
       await deleteByIn(txn, 'activity_suggestions', 'day_id', sorted);
       await deleteByIn(txn, 'activity_review_days', 'day_id', sorted);
+      final planState = await _sleepPlanState(txn);
+      final pending = Map<String, dynamic>.from(planState['pending_overrides'] as Map);
+      final revisions = Map<String, dynamic>.from(planState['override_days'] as Map);
+      final revision = (planState['override_revision'] as int) + 1;
+      for (final day in sorted) {
+        pending.remove(day);
+        revisions[day] = revision;
+      }
+      planState['override_days'] = revisions;
+      planState['override_revision'] = revision;
+      planState['pending_overrides'] = pending;
+      planState['source_revision'] = (planState['source_revision'] as int) + 1;
+      planState['refresh_pending'] = true;
+      await _putSleepPlanState(txn, planState);
     });
+    WeightStore.notifyCommitted();
     return deleted;
   }
 
@@ -8863,6 +8982,8 @@ class LocalDb {
   /// not matched; the sqlite/Android internal tables are skipped by name.
   static Future<int> wipeAll() async {
     final db = await instance;
+    await CoachStore.beforeReset(db);
+    await CoachStore.deleteLegacy(db);
     final rows = await db.rawQuery(
       "SELECT name FROM sqlite_master WHERE type = 'table' "
       "AND name NOT LIKE 'sqlite_%' AND name != 'android_metadata'",
@@ -8874,6 +8995,7 @@ class LocalDb {
         if (t is String) deleted += await txn.delete(t);
       }
     });
+    WeightStore.notifyCommitted();
     return deleted;
   }
 
@@ -9089,6 +9211,10 @@ class LocalDb {
       // banked. They were also simply MISSING here until now — nutrition,
       // medication, strength sets, symptoms and routes did not survive a
       // backup/restore round trip at all, the same omission `wipeAll` documents.
+      'coach_legacy',
+      'coach_chat',
+      'coach_preferences',
+      'coach_memory',
       'journal',
       'journal_metric',
       'journal_field_def',
@@ -9100,6 +9226,7 @@ class LocalDb {
       'food_def',
       'med_def',
       'med_dose',
+      'alarm_schedule',
       'cycle_log',
       'cycle_symptom',
       'breathing_session',
@@ -9134,6 +9261,7 @@ class LocalDb {
       // Re-readable from the health store, but only for as long as that app is
       // installed and that permission is granted — cheaper to carry.
       'imported_measurement',
+      'imported_weight',
       // Same reasoning, and more so: a route is thousands of points that the
       // source app may have deleted since. `workout_route` is already in this
       // list above and carries the imported routes too.
@@ -9252,7 +9380,8 @@ class LocalDb {
           // destination columns and no table has a column by that name.
           const pageSize = 2000;
           const rowidKey = '_rowid';
-          var lastRowid = 0;
+          // Weekday zero (Monday) is a valid INTEGER PRIMARY KEY/rowid.
+          var lastRowid = t == 'alarm_schedule' ? -1 : 0;
           Future<List<Map<String, Object?>>> nextPage() => src.rawQuery(
             'SELECT rowid AS $rowidKey, * FROM $t '
             'WHERE rowid > ? ORDER BY rowid ASC LIMIT ?',
@@ -9612,8 +9741,18 @@ class LocalDb {
                 );
                 if (++ops >= chunkOps) await flush();
               }
+              if (t == 'imported_weight') {
+                // A restored record may have been deleted at the source before
+                // our existing token. Reconcile afresh; never restore a token
+                // from another installation or advance past restored records.
+                batch.delete('weight_import_sync');
+              }
               await flush();
             });
+            if (t == 'imported_weight' ||
+                t == 'journal_metric' && page.any((row) => row['field'] == 'weight_kg')) {
+              WeightStore.notifyCommitted();
+            }
             // Advance past the last row this page actually delivered. Read the
             // cursor BEFORE dropping the page, and stop on a short page rather
             // than issuing one more query to discover the end.
@@ -9832,6 +9971,10 @@ class LocalDb {
       'metric_series',
       'baselines',
       'sessions',
+      'coach_legacy',
+      'coach_chat',
+      'coach_preferences',
+      'coach_memory',
       'journal',
       'journal_metric',
       'journal_field_def',
@@ -9859,6 +10002,7 @@ class LocalDb {
       'band_backlog',
       'external_hr',
       'imported_measurement',
+      'imported_weight',
       'imported_workout',
       'observation',
       'device',
@@ -10180,16 +10324,255 @@ class LocalDb {
     return rows.isEmpty ? 0 : rows.single['revision'] as int;
   }
 
+  static const _sleepPlanContextKey = 'sleep_plan_context';
+  static const _sleepTargetPrefix = 'sleep_target:';
+  static const sleepPlanInputWindow = 90;
+
+  static Future<Map<String, dynamic>> _sleepPlanState(DatabaseExecutor tx) async {
+    final rows = await tx.query('baselines', where: 'key = ?',
+        whereArgs: [_sleepPlanContextKey], limit: 1);
+    final state = rows.isEmpty ? <String, dynamic>{}
+        : Map<String, dynamic>.from(jsonDecode(rows.single['payload_json'] as String) as Map);
+    return {
+      'source_revision': (state['source_revision'] as num?)?.toInt() ?? 0,
+      'override_revision': (state['override_revision'] as num?)?.toInt() ?? 0,
+      'override_days': state['override_days'] as Map? ?? <String, dynamic>{},
+      'pending_overrides': state['pending_overrides'] as Map? ?? <String, dynamic>{},
+      'refresh_pending': state['refresh_pending'] == true,
+    };
+  }
+
+  static Future<void> _putSleepPlanState(DatabaseExecutor tx, Map<String, dynamic> state) =>
+      tx.insert('baselines', {'key': _sleepPlanContextKey,
+        'payload_json': jsonEncode(state), 'updated_at': DateTime.now().millisecondsSinceEpoch},
+        conflictAlgorithm: ConflictAlgorithm.replace);
+
+  static Future<void> _markSleepPlanOverride(DatabaseExecutor tx, String day) async {
+    final state = await _sleepPlanState(tx);
+    final revision = (state['override_revision'] as int) + 1;
+    state['override_revision'] = revision;
+    state['source_revision'] = (state['source_revision'] as int) + 1;
+    state['override_days'] = {...state['override_days'] as Map, day: revision};
+    state['pending_overrides'] = {...state['pending_overrides'] as Map, day: revision};
+    state['refresh_pending'] = true;
+    await _putSleepPlanState(tx, state);
+  }
+
+  static Future<String> _sleepPlanOverrideStamp(DatabaseExecutor tx, String day) async {
+    final rows = await tx.query('sleep_override', where: 'day_id = ?', whereArgs: [day], limit: 1);
+    return jsonEncode(rows.isEmpty ? null : [rows.single['onset_ts'], rows.single['offset_ts'],
+      rows.single['source'], rows.single['created_at']]);
+  }
+
+  static Future<({int revision, String overrideStamp})> sleepPlanPreparation(String day) async =>
+      (await instance).transaction((tx) async => (
+        revision: (await _sleepPlanState(tx))['override_revision'] as int,
+        overrideStamp: await _sleepPlanOverrideStamp(tx, day),
+      ));
+
+  static Future<int> sleepPlanOverrideRevision() async =>
+      (await _sleepPlanState(await instance))['override_revision'] as int;
+
+  static Future<Set<String>> pendingSleepPlanOverrideDays() async =>
+      ((await _sleepPlanState(await instance))['pending_overrides'] as Map).keys.cast<String>().toSet();
+
+  static Future<bool> sleepPlanRefreshPending() async =>
+      (await _sleepPlanState(await instance))['refresh_pending'] == true;
+
+  // The context uses metadata already persisted with the actual input rows.
+  // A transaction keeps the review/override revisions and row snapshot aligned.
+  static Future<({List<Map<String, dynamic>> rows, Map<String, dynamic> context})>
+      sleepPlanInputSnapshot() async => (await instance).transaction((tx) async {
+        final rows = await tx.rawQuery('SELECT r.* FROM day_result r $_servedDayJoin '
+            'ORDER BY r.day_id DESC LIMIT ?', [sleepPlanInputWindow]);
+        return (rows: [for (final r in rows) _withDate(r)],
+          context: await _sleepPlanSourceContext(tx, rows: rows));
+      });
+
+  static Future<Map<String, dynamic>> _sleepPlanSourceContext(DatabaseExecutor tx,
+      {List<Map<String, Object?>>? rows}) async {
+    final state = await _sleepPlanState(tx);
+    rows ??= await tx.rawQuery('SELECT r.day_id, r.algo_version, r.computed_at, '
+        'r.finalized, r.partial, r.skipped FROM day_result r $_servedDayJoin '
+        'ORDER BY r.day_id DESC LIMIT ?', [sleepPlanInputWindow]);
+    final review = await tx.query('activity_review_meta', columns: ['revision']);
+    final overrides = await tx.query('sleep_override', orderBy: 'day_id');
+    final pending = state['pending_overrides'] as Map;
+    final keys = pending.keys.cast<String>().toList()..sort();
+    return {
+      'local_day': localDayLabelNow(),
+      'utc_offset_min': DateTime.now().timeZoneOffset.inMinutes,
+      'algo_version': kAlgoVersion,
+      'source_revision': state['source_revision'],
+      'override_revision': state['override_revision'],
+      'review_revision': review.isEmpty ? 0 : review.single['revision'],
+      'rows': [for (final r in rows) [r['day_id'], r['algo_version'], r['computed_at'],
+        r['finalized'], r['partial'], r['skipped']]],
+      'overrides': [for (final r in overrides) [r['day_id'], r['onset_ts'],
+        r['offset_ts'], r['source'], r['created_at']]],
+      'pending_overrides': [for (final day in keys) [day, pending[day]]],
+    };
+  }
+
+  static Future<Map<String, dynamic>> sleepPlanSourceContext() async =>
+      (await instance).transaction((tx) => _sleepPlanSourceContext(tx));
+
+  static bool sleepPlanHasPendingOverrides(Map<String, dynamic> context) =>
+      (context['pending_overrides'] as List?)?.isNotEmpty ?? true;
+
+  static Future<bool> sleepPlanContextCurrent(Object? expected) async {
+    if (expected is! Map) return false;
+    return (await instance).transaction((tx) => _sleepPlanContextMatches(tx, expected));
+  }
+
+  static Future<bool> _sleepPlanContextMatches(DatabaseExecutor tx, Map expected) async {
+    final source = Map<String, dynamic>.from(expected)..remove('input_updated_at');
+    if (jsonEncode(source) != jsonEncode(await _sleepPlanSourceContext(tx))) return false;
+    if (expected.containsKey('input_updated_at')) {
+      final input = await tx.query('baselines', columns: ['updated_at'],
+          where: 'key = ?', whereArgs: ['crossday_input'], limit: 1);
+      if (input.isEmpty || input.single['updated_at'] != expected['input_updated_at']) return false;
+    }
+    return true;
+  }
+
+  static Future<bool> finishSleepPlanRefresh(Map<String, dynamic> context) async =>
+      (await instance).transaction((tx) async {
+        if (sleepPlanHasPendingOverrides(context) || !await _sleepPlanContextMatches(tx, context)) return false;
+        final state = await _sleepPlanState(tx);
+        state['refresh_pending'] = false;
+        await _putSleepPlanState(tx, state);
+        return true;
+      });
+
   /// A calculation started before a review must never publish over it.
-  static Future<bool> putReviewedBaseline(String key, String payloadJson, int expectedRevision) async {
+  static Future<bool> putReviewedBaseline(String key, String payloadJson, int expectedRevision,
+      {Map<String, dynamic>? sleepPlanContext}) async {
     return (await instance).transaction((tx) async {
       final rows = await tx.query('activity_review_meta', columns: ['revision']);
       final revision = rows.isEmpty ? 0 : rows.single['revision'] as int;
       if (revision != expectedRevision) return false;
+      if (sleepPlanContext != null && !await _sleepPlanContextMatches(tx, sleepPlanContext)) return false;
+      var updatedAt = DateTime.now().millisecondsSinceEpoch;
+      if (key == 'crossday_input') {
+        // A durable identity even when two refreshes finish in one millisecond.
+        final previous = await tx.query('baselines', columns: ['updated_at'],
+            where: 'key = ?', whereArgs: [key], limit: 1);
+        if (previous.isNotEmpty && (previous.single['updated_at'] as int) >= updatedAt) {
+          updatedAt = (previous.single['updated_at'] as int) + 1;
+        }
+      }
       await tx.insert('baselines', {'key': key, 'payload_json': payloadJson,
-        'updated_at': DateTime.now().millisecondsSinceEpoch}, conflictAlgorithm: ConflictAlgorithm.replace);
+        'updated_at': updatedAt}, conflictAlgorithm: ConflictAlgorithm.replace);
+      if (key == 'crossday' && sleepPlanContext != null &&
+          !sleepPlanHasPendingOverrides(sleepPlanContext)) {
+        await _recordSleepTarget(tx, payloadJson, updatedAt);
+      }
+      if (key == 'crossday_input') {
+        final state = await _sleepPlanState(tx);
+        state['refresh_pending'] = true;
+        await _putSleepPlanState(tx, state);
+      }
+      if (key == 'crossday' && sleepPlanContext != null &&
+          !sleepPlanHasPendingOverrides(sleepPlanContext)) {
+        final state = await _sleepPlanState(tx);
+        state['refresh_pending'] = false;
+        await _putSleepPlanState(tx, state);
+      }
       return true;
     });
+  }
+
+  // Prospective targets share the existing backed-up baseline store. No new
+  // schema or ledger balance: completed nights retain their own snapshot in
+  // day_result, while this bounded journal only bridges the next night.
+  static Future<void> _recordSleepTarget(DatabaseExecutor tx,
+      String payloadJson, int committedMs) async {
+    final plan = jsonDecode(payloadJson) as Map;
+    final coach = plan['sleep_coach'];
+    final env = coach is Map ? coach['need'] : null;
+    final value = env is Map ? env['value'] : null;
+    final need = value is Map ? value['need_sec'] : null;
+    final built = plan['built_at_epoch'];
+    final day = plan['built_for_day'];
+    final targetDay = coach is Map ? coach['target_day'] : null;
+    final referenceDay = coach is Map ? coach['reference_night_day'] : null;
+    final referenceOnset = coach is Map ? coach['reference_night_onset_sec'] : null;
+    final referenceWake = coach is Map ? coach['reference_night_wake_sec'] : null;
+    final referenceEnd = referenceDay is String ? localDayEndSec(referenceDay) : null;
+    final nextDay = referenceEnd == null ? null : dayLabelOf(
+        DateTime.fromMillisecondsSinceEpoch(referenceEnd * 1000));
+    if (need is! num || !need.isFinite || need <= 0 || need > 24 * 3600 ||
+        built is! num || !built.isFinite || built <= 0 ||
+        built * 1000 > committedMs || day is! String ||
+        day != localDayLabelNow() || plan['algo_version'] != kAlgoVersion ||
+        targetDay is! String || targetDay != nextDay || targetDay.compareTo(day) < 0 ||
+        referenceOnset is! num || !referenceOnset.isFinite || referenceOnset <= 0 ||
+        referenceWake is! num || !referenceWake.isFinite ||
+        referenceWake <= referenceOnset || referenceWake > built) {
+      return;
+    }
+    final previous = await tx.query('baselines',
+        where: 'key >= ? AND key < ?',
+        whereArgs: [_sleepTargetPrefix, '$_sleepTargetPrefix~'],
+        orderBy: 'updated_at DESC', limit: 1);
+    if (previous.isNotEmpty) {
+      final p = jsonDecode(previous.single['payload_json'] as String) as Map;
+      if (p['need_sec'] == need && p['source_day'] == day &&
+          p['target_day'] == targetDay &&
+          p['reference_night_onset_sec'] == referenceOnset &&
+          p['reference_night_wake_sec'] == referenceWake &&
+          p['algo_version'] == kAlgoVersion) {
+        return;
+      }
+      final priorMs = previous.single['updated_at'] as int;
+      if (committedMs <= priorMs) committedMs = priorMs + 1;
+    }
+    final target = {'model': 'observed_sleep_target_v1', 'need_sec': need,
+      'source_day': day, 'built_at_epoch': built,
+      'target_day': targetDay, 'reference_night_day': referenceDay,
+      'reference_night_onset_sec': referenceOnset,
+      'reference_night_wake_sec': referenceWake,
+      'committed_at_epoch': committedMs ~/ 1000,
+      'algo_version': kAlgoVersion, 'confidence': env['confidence']};
+    await tx.insert('baselines', {
+      'key': '$_sleepTargetPrefix$day:$targetDay:$committedMs',
+      'payload_json': jsonEncode(target), 'updated_at': committedMs});
+    await tx.delete('baselines',
+        where: 'key >= ? AND key < ? AND updated_at < ?',
+        whereArgs: [_sleepTargetPrefix, '$_sleepTargetPrefix~',
+          committedMs - const Duration(days: 31).inMilliseconds]);
+  }
+
+  static Future<Map<String, dynamic>?> sleepTargetBefore(int onsetSec,
+      {required String nightDay}) async {
+    final db = await instance;
+    final rows = await db.query('baselines',
+        where: 'key >= ? AND key < ? AND key LIKE ? AND updated_at < ?',
+        whereArgs: [_sleepTargetPrefix, '$_sleepTargetPrefix~',
+          '$_sleepTargetPrefix%:$nightDay:%', onsetSec * 1000],
+        orderBy: 'updated_at DESC', limit: 1);
+    if (rows.isEmpty) return null;
+    final reference = sleepPlanReference(
+        jsonDecode(rows.single['payload_json'] as String), onsetSec,
+        nightDay: nightDay);
+    if (reference == null) return null;
+    final committed = (reference['committed_at_epoch'] as num).toInt();
+    // A stale plan cannot be reused for a second night during a backfill.
+    // Small window-only reads; no raw decode or full-payload work on read.
+    final from = dayLabelOf(DateTime.fromMillisecondsSinceEpoch(committed * 1000));
+    final to = dayLabelOf(DateTime.fromMillisecondsSinceEpoch(onsetSec * 1000));
+    final nights = await db.rawQuery('SELECT r.window_json FROM day_result r '
+        '$_servedDayJoin WHERE r.day_id >= ? AND r.day_id <= ?', [from, to]);
+    for (final row in nights) {
+      final envelope = jsonDecode(row['window_json'] as String);
+      final window = envelope is Map ? envelope['value'] : null;
+      final wake = window is Map ? window['offset_ms'] : null;
+      if (wake is num && wake > committed * 1000 && wake < onsetSec * 1000) {
+        return null;
+      }
+    }
+    return reference;
   }
 
   static Future<void> putBaseline(String key, String payloadJson) async {
@@ -10512,6 +10895,7 @@ class LocalDb {
     final bandEdgeSec = await lastDecodedRecTs() ?? 0;
     String? latestOvernightDay;
     int? latestOvernightComputedAt;
+    String? latestSleepDay;
     String? latestRecoveryDay;
     int? latestRecoveryComputedAt;
     Map<String, dynamic>? todayRow;
@@ -10548,9 +10932,18 @@ class LocalDb {
       }
       final scalars = ((decoded['scalars'] as Map?) ?? const {})
           .cast<String, dynamic>();
+      final sleep =
+          ((decoded['sleep'] as Map?)?['accounting'] as Map?)?['value'];
+      // A settled no-sleep day is valid coverage, but does not start a new
+      // waking day on Home. Keep that distinct from the latest actual sleep.
+      if (latestSleepDay == null &&
+          dayId.compareTo(today) <= 0 &&
+          sleep is Map &&
+          sleep['tst_sec'] is num &&
+          (sleep['tst_sec'] as num) > 0) {
+        latestSleepDay = dayId;
+      }
       if (latestOvernightDay == null) {
-        final sleep =
-            ((decoded['sleep'] as Map?)?['accounting'] as Map?)?['value'];
         final flags = decoded['flags'];
         final hasSleep = sleep is Map && sleep['tst_sec'] != null;
         final noSleep = flags is List && flags.contains('NO_SLEEP_DETECTED');
@@ -10565,6 +10958,7 @@ class LocalDb {
         latestRecoveryComputedAt = (row['computed_at'] as num?)?.toInt();
       }
       if (latestOvernightDay != null &&
+          latestSleepDay != null &&
           latestRecoveryDay != null &&
           todayRow != null) {
         break;
@@ -10601,6 +10995,7 @@ class LocalDb {
         'activity_state': activityState,
         'activity_computed_at': todayComputedAt ?? wakeComputedAt,
         'overnight_day': latestOvernightDay,
+        'last_sleep_day': latestSleepDay,
         'overnight_state': overnightState,
         'overnight_computed_at': latestOvernightComputedAt,
         'overnight_recheck_at': overnightRecheckAt,
@@ -10863,7 +11258,16 @@ class LocalDb {
   ) async {
     final db = await instance;
     final now = DateTime.now().millisecondsSinceEpoch;
+    var weightChanged = false;
     await db.transaction((txn) async {
+      final previous = await txn.query('journal_metric',
+          columns: ['value', 'at_min'], where: 'date = ? AND field = ?',
+          whereArgs: [date, 'weight_kg'], limit: 1);
+      final weight = fields['weight_kg'];
+      weightChanged = previous.isEmpty
+          ? weight != null
+          : weight == null || previous.single['value'] != weight.value ||
+              previous.single['at_min'] != weight.atMinuteOfDay;
       await txn.delete('journal_metric', where: 'date = ?', whereArgs: [date]);
       for (final e in fields.entries) {
         await txn.insert('journal_metric', {
@@ -10875,6 +11279,7 @@ class LocalDb {
         }, conflictAlgorithm: ConflictAlgorithm.replace);
       }
     });
+    if (weightChanged) WeightStore.notifyCommitted();
   }
 
   /// One day's numeric fields, or an empty map when nothing was recorded.
@@ -11815,6 +12220,21 @@ class LocalDb {
     // caller's `if (deleted > 0) log(...)` never fired even on a real prune.
     int deleted = 0;
     await db.transaction((txn) async {
+      // A correction may arrive after the scheduler chose its cutoff. Recheck
+      // in the deleting transaction and retain every still-present window
+      // needed by the durable retry. Raw-less historical edits do not hold
+      // retention for the rest of the database.
+      final pending = (await _sleepPlanState(txn))['pending_overrides'] as Map;
+      for (final day in pending.keys.cast<String>()) {
+        final date = DateTime.tryParse(day);
+        final end = localDayEndSec(day);
+        if (date == null || end == null) continue;
+        final start = DateTime(date.year, date.month, date.day - 1).millisecondsSinceEpoch ~/ 1000;
+        final window = await txn.rawQuery('SELECT MIN(rec_ts) AS first FROM decoded_onehz '
+            'WHERE rec_ts >= ? AND rec_ts < ?', [start, end]);
+        final first = (window.single['first'] as num?)?.toInt();
+        if (first != null && first < cutoffSec) cutoffSec = first;
+      }
       if (cursorName != null) {
         final previous = await _cursorIntVia(txn, cursorName);
         if (previous == null || cutoffSec > previous) {

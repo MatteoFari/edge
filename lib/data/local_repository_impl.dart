@@ -27,6 +27,7 @@ import 'package:openstrap_protocol/openstrap_protocol.dart' as proto;
 import 'package:openstrap_analytics/onehz.dart' as ana;
 
 import 'day_label.dart';
+import 'respiratory_display.dart';
 import 'db.dart';
 import 'activity_store.dart';
 import '../models/activity_suggestion.dart';
@@ -34,6 +35,7 @@ import '../health/health_export.dart';
 import 'journal_fields.dart';
 import 'local_repository.dart';
 import 'series_codec.dart';
+import 'sleep_plan_reference.dart';
 import '../gps/route_models.dart';
 import '../gps/route_math.dart' as rmath;
 
@@ -143,7 +145,36 @@ class LocalRepositoryImpl extends LocalRepository {
   Future<Map<String, dynamic>?> _crossDay() async {
     final a = await _crossDayArtifact();
     if (a == null) return null;
-    return crossDayStaleReason(a, _todayLocalLabel()) == null ? a : null;
+    final today = _todayLocalLabel();
+    return crossDayStaleReason(a, today) == null
+        ? _withCurrentSleepPlan(a, today)
+        : null;
+  }
+
+  /// A next-sleep plan is scoped to the local day it was calculated for.
+  /// Aggregate trends may survive the general cross-day age gate, but an older
+  /// plan still contains that day's strain and nap adjustments. Keep those
+  /// numbers out of every read seam once their planning day has ended or the
+  /// accepted inputs changed before a replacement could be published.
+  Future<Map<String, dynamic>> _withCurrentSleepPlan(
+    Map<String, dynamic> artifact,
+    String today,
+  ) async {
+    final sameDay = artifact['built_for_day'] == today;
+    final context = artifact['sleep_plan_context'];
+    if (sameDay && context is Map &&
+        !LocalDb.sleepPlanHasPendingOverrides(Map<String, dynamic>.from(context)) &&
+        await LocalDb.sleepPlanContextCurrent(context)) {
+      return artifact;
+    }
+    return Map<String, dynamic>.from(artifact)
+      ..remove('sleep_coach')
+      ..remove('sleep_debt')
+      ..['sleep_plan_stale'] = {
+        'kind': sameDay ? 'plan_context' : 'plan_day',
+        'built_for_day': artifact['built_for_day'],
+        'current_day': today,
+      };
   }
 
   /// The stored artifact, UNGATED — only `_crossDay` and `getInsights` may
@@ -325,6 +356,7 @@ class LocalRepositoryImpl extends LocalRepository {
     var todayFresh = await _freshness('today');
     final recheckAt = (todayFresh?['overnight_recheck_at'] as num?)?.toInt();
     if (todayFresh == null ||
+        !todayFresh.containsKey('last_sleep_day') ||
         todayFresh['today_day']?.toString() != _todayLocalLabel() ||
         (todayFresh['overnight_state'] == 'building' &&
             recheckAt != null &&
@@ -362,6 +394,7 @@ class LocalRepositoryImpl extends LocalRepository {
         'sleep': const {},
         'status': {
           'today_day': todayDay,
+          'last_sleep_day': todayFresh?['last_sleep_day'],
           'overnight_state': overnightState,
           'activity_state': activityState,
         },
@@ -519,7 +552,8 @@ class LocalRepositoryImpl extends LocalRepository {
       'daily': daily,
       'sleep': sleepBundle == null
           ? const {}
-          : _sleepSummary(sleepBundle, needMin: _sleepNeedMin(cd)),
+          : _sleepSummary(sleepBundle,
+              needMin: _nightSleepNeedMin(sleepBundle)),
       if (sleepBundle != null && rhrEnv != null)
         'nocturnal': _nocturnal(
           sleepBundle,
@@ -564,6 +598,7 @@ class LocalRepositoryImpl extends LocalRepository {
       'regularity': cd?['regularity'],
       'status': {
         'today_day': todayDay,
+        'last_sleep_day': todayFresh?['last_sleep_day'],
         'activity_state': activityState,
         'activity_day': todayFresh?['activity_day'],
         'activity_computed_at': todayFresh?['activity_computed_at'],
@@ -642,13 +677,16 @@ class LocalRepositoryImpl extends LocalRepository {
   Future<Map<String, dynamic>> getInsights() async {
     final cd = await _crossDayArtifact();
     if (cd == null) return const {};
-    final stale = crossDayStaleReason(cd, _todayLocalLabel());
+    final today = _todayLocalLabel();
+    final stale = crossDayStaleReason(cd, today);
     // FAIL CLOSED. Returning the reason INSTEAD of the artifact means every
     // `insights['readiness_glassbox']` read comes back absent — the state the
     // screens already render honestly — while `stale` carries why, in the
     // spirit of `need_baseline:have=H,need=N`. Serving the old numbers with no
     // marker was the bug.
-    return stale == null ? cd : {'stale': stale};
+    return stale == null
+        ? _withCurrentSleepPlan(cd, today)
+        : {'stale': stale};
   }
 
   Future<int> _stepGoal() async =>
@@ -676,16 +714,9 @@ class LocalRepositoryImpl extends LocalRepository {
     return total == null ? null : (total / 60).round();
   }
 
-  /// Tonight's LEARNED sleep need, in minutes, or null.
-  ///
-  /// `sleep_coach.need` is the only sleep need this app has: `crossday_pipeline`
-  /// estimates it from the user's own undisturbed nights and emits an ABSENT
-  /// metric until enough of them exist — there is no 8 h default anywhere on
-  /// the compute side, deliberately. The 480 that used to stand in for it here
-  /// reached the home widget, the Watch and the Sleep screen as a denominator.
-  int? _sleepNeedMin(Map<String, dynamic>? crossDay) {
-    final sec = _sub(crossDay, 'sleep_coach.need.value')?['need_sec'] as num?;
-    return sec == null ? null : (sec / 60).round();
+  int? _nightSleepNeedMin(Map<String, dynamic> bundle) {
+    final seconds = nightSleepTargetSec(bundle);
+    return seconds == null ? null : (seconds / 60).round();
   }
 
   Map<String, dynamic> _sleepSummary(Map<String, dynamic> b, {int? needMin}) {
@@ -701,7 +732,7 @@ class LocalRepositoryImpl extends LocalRepository {
         'ESTIMATE',
         unit: 'min',
       ),
-      // Sleep need, ONLY when it was learned (see [_sleepNeedMin]). Absent means
+      // This night's target, ONLY when it was saved before onset. Absent means
       // the key is not written at all, so `TodayData.sleepNeed` is empty and
       // `WidgetService.push` writes the -1 sentinel every native reader gates
       // its sleep ring on (`needMin > 0` in OpenStrapWidget.swift,
@@ -758,19 +789,7 @@ class LocalRepositoryImpl extends LocalRepository {
   /// Carrying the note through costs nothing and is the difference between
   /// telling someone why their night produced no number and guessing at it.
   Map<String, dynamic>? _respObj(Map<String, dynamic> b) {
-    final rr = _scalar(b, 'resp_rate');
-    final env = _sub(b, 'respiration.rsa');
-    if (rr == null) {
-      final note = env?['note']?.toString();
-      return note == null || note.isEmpty
-          ? null
-          : {'value': null, 'note': note};
-    }
-    // Round to 1 dp — the raw double (16.0121312…) was overflowing the card.
-    return {
-      'value': double.parse(rr.toStringAsFixed(1)),
-      'confidence': (env?['confidence'] as num?) ?? 0.5,
-    };
+    return respiratoryDisplayMetric(b);
   }
 
   /// Relative skin-temp deviation block. Present once a value exists; otherwise
@@ -994,7 +1013,7 @@ class LocalRepositoryImpl extends LocalRepository {
       return v == null ? null : (v / 60).round();
     }
 
-    final needMin = _sleepNeedMin(await _crossDay());
+    final needMin = _nightSleepNeedMin(b);
     final sleepConf = _sub(b, 'sleep.accounting')?['confidence'] as num?;
     // Sleep periods (main + naps) for the periods screen. The main period is
     // enriched HERE with the hypnogram + stage minutes: derivation builds the
@@ -1063,16 +1082,11 @@ class LocalRepositoryImpl extends LocalRepository {
       // a general daytime heart metric. Pure re-exposure of the same bundle
       // field getDayHeart already read; no new computation.
       'spo2': b['spo2'],
-      // Sleep need, and the debt against it — both only when the need was
-      // actually learned (`sleep_coach.need`, see [_sleepNeedMin]; it is the
-      // current personal estimate, and the artifact behind it is refused once
-      // it is more than a week old). There is no 8 h default: it made the gauge
-      // "always read", which is the point, since what it read was a population
-      // figure presented as this user's own. Absent keys leave the gauge in its
-      // honest empty state.
+      // This night's prospective target, never the current next-sleep target.
+      // Legacy nights without a snapshot have no invented denominator.
       'need_min': ?needMin,
-      if (needMin != null)
-        'debt_min': ((needMin - (tst / 60)).clamp(0, needMin)).round(),
+      if (needMin != null && b['sleep_plan_complete'] == true)
+        'target_shortfall_min': ((needMin - (tst / 60)).clamp(0, needMin)).round(),
       'regularity':
           null, // needs ≥several nights (honest null → "Need N nights")
       // Sleep periods (main + naps) for the periods screen. The main period is
@@ -1658,8 +1672,11 @@ class LocalRepositoryImpl extends LocalRepository {
   Future<Map<String, dynamic>> getDayOverview(String date) async {
     final b = await _bundleForDate(date);
     if (b == null) return const {};
+    final pin = await LocalDb.frozenHeadline();
     return {
-      'readiness': _scalar(b, 'readiness'),
+      // Home can continue this dated waking day after midnight. Keep the
+      // same morning headline until the next night's pin replaces it.
+      'readiness': pin?.day == date ? pin!.value : _scalar(b, 'readiness'),
       'resting_hr': _scalar(b, 'rhr')?.round(),
     };
   }
@@ -1772,7 +1789,9 @@ class LocalRepositoryImpl extends LocalRepository {
     }
 
     // Respiratory rate (br/min) + relative skin-temp trend — all-day lines.
-    final respLine = (series?['resp_day'] as List?) ?? const [];
+    final respLine = _sub(b, 'respiration.experimental') != null
+      ? experimentalRespiratoryCurve(b)
+      : (series?['resp_day'] as List?) ?? const [];
     final tempLine = (series?['skin_temp_day'] as List?) ?? const [];
 
     return {
@@ -2212,6 +2231,19 @@ class LocalRepositoryImpl extends LocalRepository {
     final now = DateTime.now();
     final nowSec = now.millisecondsSinceEpoch ~/ 1000;
     final fromTs = _rangeFromSec(range, now);
+    return _workoutsBetween(fromTs, nowSec);
+  }
+
+  @override
+  Future<Map<String, dynamic>> getWorkoutHistory({
+    required int fromTs,
+    required int untilTs,
+  }) async {
+    if (untilTs <= fromTs) return {'workouts': const []};
+    return _workoutsBetween(fromTs, untilTs - 1);
+  }
+
+  Future<Map<String, dynamic>> _workoutsBetween(int fromTs, int nowSec) async {
     final rows = await LocalDb.sessionsInRange(fromTs, nowSec);
     final workouts = [for (final r in rows) _workoutOf(r)];
     // Seconds each session's banked trace was scored from. A substrate window

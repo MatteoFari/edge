@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../l10n/app_localizations.dart';
+import '../detail_transition.dart';
 import '../grammar.dart';
 import '../theme.dart';
 import 'catalogue.dart';
@@ -54,11 +55,10 @@ class _ActivityPickerState extends State<ActivityPicker> {
   /// something to fade out.
   int closing = -1;
 
-  void _pick(BuildContext c, Activity a) {
-    if (widget.onPick != null) return widget.onPick!(c, a);
-    Navigator.of(c).push(MaterialPageRoute(
-        builder: (_) =>
-            ActivitySetup(a, weightKg: widget.weightKg, host: widget.host)));
+  Widget _choice(BuildContext c, Activity a, Widget Function(VoidCallback) build) {
+    if (widget.onPick != null) return build(() => widget.onPick!(c, a));
+    return DetailLink(builder: (open) => build(() => open<void>(
+        ActivitySetup(a, weightKg: widget.weightKg, host: widget.host))));
   }
 
   @override
@@ -70,7 +70,7 @@ class _ActivityPickerState extends State<ActivityPicker> {
     final results = searching
         ? [
             for (final a in allActivities)
-              if (a.name.toLowerCase().contains(needle)) a,
+              if (a.matches(needle, AppLocalizations.of(c))) a,
           ]
         : const <Activity>[];
 
@@ -88,7 +88,7 @@ class _ActivityPickerState extends State<ActivityPicker> {
               constraints: const BoxConstraints(minHeight: S.tap),
               padding: const EdgeInsets.symmetric(horizontal: S.x4),
               decoration:
-                  BoxDecoration(color: p.card2, borderRadius: R.rMd),
+                  BoxDecoration(color: p.card2, borderRadius: R.controlOf(c)),
               child: Row(children: [
                 Icon(LucideIcons.search, size: 17, color: p.ink3),
                 const SizedBox(width: S.x2),
@@ -139,9 +139,9 @@ class _ActivityPickerState extends State<ActivityPicker> {
                       pad: const EdgeInsets.symmetric(horizontal: S.x4),
                       child: Column(children: [
                         for (var i = 0; i < results.length; i++) ...[
-                          ActivityRow(results[i],
+                          _choice(c, results[i], (tap) => ActivityRow(results[i],
                               weightKg: widget.weightKg,
-                              onTap: () => _pick(c, results[i])),
+                              onTap: tap)),
                           if (i < results.length - 1)
                             Divider(color: p.line, height: 1),
                         ],
@@ -167,7 +167,7 @@ class _ActivityPickerState extends State<ActivityPicker> {
                         itemCount: row.length,
                         separatorBuilder: (_, _) => const SizedBox(width: S.x3),
                         itemBuilder: (_, i) =>
-                            _Quick(row[i], () => _pick(c, row[i])),
+                            _choice(c, row[i], (tap) => _Quick(row[i], tap)),
                       ),
                     );
                   }),
@@ -186,7 +186,7 @@ class _ActivityPickerState extends State<ActivityPicker> {
                               size: 18, color: p.ink2),
                           const SizedBox(width: S.x3),
                           Expanded(
-                              child: Text(activityLibrary[gi].name,
+                              child: Text(activityLibrary[gi].label(l),
                                   style: F.head.copyWith(color: p.ink))),
                           Text('${activityLibrary[gi].items.length}',
                               style: F.cap.copyWith(color: p.ink3)),
@@ -213,10 +213,9 @@ class _ActivityPickerState extends State<ActivityPicker> {
                                 for (var i = 0;
                                     i < activityLibrary[gi].items.length;
                                     i++) ...[
-                                  ActivityRow(activityLibrary[gi].items[i],
+                                  _choice(c, activityLibrary[gi].items[i], (tap) => ActivityRow(activityLibrary[gi].items[i],
                                       weightKg: widget.weightKg,
-                                      onTap: () => _pick(
-                                          c, activityLibrary[gi].items[i])),
+                                      onTap: tap)),
                                   if (i <
                                       activityLibrary[gi].items.length - 1)
                                     Divider(color: p.line, height: 1),
@@ -280,7 +279,7 @@ class ActivityRow extends StatelessWidget {
           Expanded(
             child: Row(children: [
               Flexible(
-                  child: Text(a.name,
+                  child: Text(a.label(AppLocalizations.of(c)),
                       style: F.body.copyWith(color: p.ink),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis)),
@@ -326,23 +325,26 @@ class _Quick extends StatelessWidget {
     final p = P.of(c);
     return Pressable(
       onTap: onTap,
-      semanticLabel: a.name,
+      semanticLabel: a.label(AppLocalizations.of(c)),
       child: Container(
         width: 84,
         decoration: BoxDecoration(
-            color: p.card, borderRadius: R.rLg, boxShadow: p.el(1)),
+            color: p.card, borderRadius: R.cardOf(c), boxShadow: p.el(1)),
         child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
           Container(
             width: 38,
             height: 38,
             decoration:
-                BoxDecoration(color: p.wash(a.color), borderRadius: R.rMd),
+                BoxDecoration(
+                  color: p.wash(a.color),
+                  borderRadius: R.controlOf(c),
+                ),
             child: Icon(a.icon, size: 18, color: p.on(a.color)),
           ),
           const SizedBox(height: S.x2),
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: S.x1),
-            child: Text(a.name,
+            child: Text(a.label(AppLocalizations.of(c)),
                 style: F.over.copyWith(color: p.ink2),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis),

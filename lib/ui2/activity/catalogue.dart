@@ -92,6 +92,11 @@ class Activity {
       ? null
       : (met! * 3.5 * kg / 200 * minutes).round();
 
+  String label(AppLocalizations? l) => l?.activityName(typeKey, name) ?? name;
+
+  bool matches(String query, AppLocalizations? l) =>
+      label(l).toLowerCase().contains(query) || name.toLowerCase().contains(query);
+
   /// The stored `sessions.type` for this activity.
   String get typeKey => name.toLowerCase().replaceAll(' ', '_');
 }
@@ -101,6 +106,9 @@ class ActGroup {
   final IconData icon;
   final List<Activity> items;
   const ActGroup(this.name, this.icon, this.items);
+
+  String label(AppLocalizations? l) =>
+      l?.activityGroup(name == 'Other' ? 'misc' : name.toLowerCase().replaceAll(RegExp(r'[^a-z]+'), '_'), name) ?? name;
 }
 
 const activityLibrary = <ActGroup>[
@@ -404,8 +412,11 @@ class ExerciseDef {
       ? null
       : 'https://wger.de/api/v2/exerciseinfo/?uuid=$sourceId';
 
-  String labelFor(String languageCode) =>
-      localizedLabels[languageCode] ?? label;
+  String labelFor(String languageCode, [AppLocalizations? l]) =>
+      languageCode == 'it'
+          ? (l ?? lookupAppLocalizations(const Locale('it'))).exerciseName(
+              key.replaceAll(RegExp(r'[^A-Za-z0-9_]'), '_'), label)
+          : localizedLabels[languageCode] ?? label;
 
   bool matches(String query, String languageCode) {
     final q = query.trim().toLowerCase();

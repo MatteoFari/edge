@@ -7,22 +7,27 @@
 
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
-import 'package:openstrap_analytics/onehz.dart' show readinessCompositeMinBaseline;
+import 'package:openstrap_analytics/onehz.dart'
+    show readinessCompositeMinBaseline;
 
 import '../../compute/onehz_pipeline.dart'
     show readinessInputShortfallNote, readinessUnstableBaselineNote;
 import '../../data/db.dart';
+import '../../data/day_label.dart';
 import '../../data/local_repository.dart';
 import '../../l10n/app_localizations.dart';
 import '../../models/metric.dart';
 import '../ui2.dart';
+import 'driver_breakdown.dart';
 import 'home_screen.dart';
 import 'investigate.dart';
 import 'metric_detail.dart';
 
 class ReadinessData {
+  final String? day;
   final Metric readiness;
   final List<Map<String, dynamic>> breakdown;
+  final List<DriverFacts> drivers;
   final int inputsUsed;
 
   /// `readiness_absent_diag` off the stored bundle — per input `{value,
@@ -49,16 +54,46 @@ class ReadinessData {
   /// as five consecutive days.
   final List<double?> series;
 
+  /// The calendar date of the last slot, fixed when the history is loaded.
+  final String? historyEnd;
+
   const ReadinessData({
+    this.day,
     this.readiness = Metric.empty,
     this.breakdown = const [],
+    this.drivers = const [],
     this.inputsUsed = 0,
     this.heldOverNight,
     this.series = const [],
+    this.historyEnd,
     this.absentDiag,
   });
 
-  static Future<ReadinessData> load(LocalRepository repo) async {
+  static Future<ReadinessData> load(
+    LocalRepository repo, {
+    String? want,
+  }) async {
+    final date = todayLabel();
+    if (want != null && want != date) {
+      final overview = await repo.getDayOverview(want);
+      final readiness = metricOf(overview['readiness']);
+      final absentDiag = readiness.value != null
+          ? null
+          : await LocalDb.readinessAbsentDiag(want);
+      return ReadinessData(
+        day: want,
+        historyEnd: want,
+        readiness: readiness.value == null && readiness.note == null
+            ? Metric(note: absentDiag?['note']?.toString())
+            : readiness,
+        series: denseDays(
+          pointsOf(await repo.getChart('recovery')),
+          90,
+          end: DateTime.parse(want),
+        ),
+        absentDiag: absentDiag,
+      );
+    }
     final today = await repo.getToday();
     final cd = await repo.getInsights();
     final chart = await repo.getChart('recovery');
@@ -67,10 +102,23 @@ class ReadinessData {
     final gb = cd['readiness_glassbox'];
     final v = envValue(gb) ?? const <String, dynamic>{};
     final bd = v['breakdown'];
+    final breakdown = [
+      for (final e in (bd is List ? bd : const []))
+        if (e is Map) e.cast<String, dynamic>(),
+    ];
+    final heart = await repo.getDayHeart(date);
+    final charts = <String, Object?>{};
+    for (final key in driverChartKeys) {
+      charts[key] = await repo.getChart(key);
+    }
 
-    final readiness = overnightMetric(today, daily is Map ? daily['readiness'] : null);
+    final readiness = overnightMetric(
+      today,
+      daily is Map ? daily['readiness'] : null,
+    );
 
     return ReadinessData(
+      historyEnd: date,
       readiness: readiness,
       // `narrative` and the glass-box `score` are DELIBERATELY not read. Both
       // belong to the deprecated percentile score, which bands at 70/40 while
@@ -79,13 +127,17 @@ class ReadinessData {
       // beneath "45 · Take it easy". The
       // breakdown below IS worth keeping; it is a parallel ranking of the same
       // four inputs, and the footer now says so.
-      breakdown: [
-        for (final e in (bd is List ? bd : const []))
-          if (e is Map) e.cast<String, dynamic>(),
-      ],
+      breakdown: breakdown,
+      drivers: driverFacts(
+        breakdown: breakdown,
+        baselines: heart['baselines'] is Map
+            ? (heart['baselines'] as Map).cast<String, dynamic>()
+            : null,
+        charts: charts,
+      ),
       inputsUsed: (v['inputs_used'] as num?)?.toInt() ?? 0,
       heldOverNight: heldOverNightOf(today),
-      series: denseDays(pointsOf(chart), 90),
+      series: denseDays(pointsOf(chart), 90, end: DateTime.parse(date)),
       // Only read when there is nothing to explain away — a scored day has no
       // diag in its bundle anyway, and this is one more day_result decode.
       //
@@ -97,14 +149,16 @@ class ReadinessData {
       absentDiag: readiness.value != null
           ? null
           : await LocalDb.readinessAbsentDiag(
-              (today['status'] as Map?)?['today_day']?.toString()),
+              (today['status'] as Map?)?['today_day']?.toString(),
+            ),
     );
   }
 }
 
 class ReadinessDetail extends StatefulWidget {
   final ReadinessData? data;
-  const ReadinessDetail({super.key, this.data});
+  final String? day;
+  const ReadinessDetail({super.key, this.data, this.day});
 
   @override
   State<ReadinessDetail> createState() => _ReadinessDetailState();
@@ -113,6 +167,9 @@ class ReadinessDetail extends StatefulWidget {
 class _ReadinessDetailState extends State<ReadinessDetail> {
   ReadinessData? _d;
   bool _loading = true;
+  bool _loadError = false;
+  int? _historyPick;
+  final String _openedDay = todayLabel();
 
   @override
   void initState() {
@@ -126,16 +183,27 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _loadError = false;
+      _historyPick = null;
+    });
     final repo = repoOf(context);
     if (repo == null) {
       if (mounted) setState(() => _loading = false);
       return;
     }
     try {
-      final d = await ReadinessData.load(repo);
+      final d = await ReadinessData.load(repo, want: widget.day);
       if (mounted) setState(() => (_d = d, _loading = false));
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadError = true;
+        });
+      }
     }
   }
 
@@ -143,182 +211,247 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
   Widget build(BuildContext c) {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
+    if (_loadError) {
+      return detailScaffold(c, l?.readinessDetailTitle ?? 'Readiness', [
+        StatusCard(
+          l?.healthCouldNotRead(l.readinessDetailTitle) ??
+              'Could not read your readiness',
+          l?.healthReadFailedBody ?? 'The stored rows failed to load.',
+          fix: l?.healthTryAgain ?? 'Try again',
+          icon: LucideIcons.refreshCw,
+          onFix: _load,
+        ),
+      ]);
+    }
     final d = _d ?? const ReadinessData();
     final v = d.readiness.value;
     final band = readinessBand(v, l);
 
-    // No date in the nav bar. It named the held-over night, and the headline
-    // can no longer BE that night — a date up here now would be labelling
-    // today's number with somebody else's day.
-    return detailScaffold(c, l?.readinessDetailTitle ?? 'Readiness', [
-      if (_loading && _d == null) ...[
-        const SizedBox(height: S.x8),
-        const Center(child: CircularProgressIndicator()),
-      ] else ...[
-        if (v == null) ...[
-          // No `why:`. The pipeline records why readiness abstained on every
-          // day it does, and the "What was missing" section directly below
-          // shows the same record in more detail. `why:` below reuses the
-          // EXACT SAME computed reason as that section (readinessInputShortfallNote
-          // off d.absentDiag) rather than a second, independently-guessed one
-          // — the two must never be able to disagree, only one be shorter.
-          // readinessUnstableBaselineNote covers the OTHER absence shape
-          // (PR #510): a z-cap withhold has no baseline shortfall to report
-          // (every input already cleared its floor), so the first function
-          // alone fell straight to the generic fallback for it.
-          Builder(builder: (c) {
-            final diagReason = readinessInputShortfallNote(d.absentDiag) ??
-                readinessUnstableBaselineNote(
-                    d.absentDiag?['note']?.toString());
-            // StatusCard.forMetric prefers a prose note already ON the
-            // metric (`told`, via whyFromNote) over `why:` — deliberately,
-            // for screen-authored text like the held-over "nothing synced
-            // yet" sentence [overnightMetric] attaches. When that wins, the
-            // diagnostic reason above never reaches the banner at all
-            // (PR #510 follow-up) — _absence below shows it in that one
-            // case so it is not lost from the screen entirely, without
-            // reintroducing the general "says it twice" duplication fixed
-            // earlier in this same PR. Mirrors forMetric's precedence
-            // exactly: a need_baseline note is rendered as the fix, not
-            // `told`, so `why:` still wins there; a `gap` replaces `why:`.
-            final note = d.readiness.note;
-            final bannerShowsDiag = d.heldOverNight == null &&
-                (needMessageFromNote(note) != null ||
-                    whyFromNote(note) == null);
-            return Column(children: [
-              StatusCard.forMetric(
-                      l?.readinessDetailNotScoredTitle ??
-                          'Readiness is not scored',
-                      d.readiness,
-                      why: diagReason ?? '',
-                      // Where the data stops, appended to whatever the
-                      // pipeline said. Not a substitute for the reason and
-                      // not a reading — "the last one was Saturday" is a
-                      // fact about coverage.
-                      gap: d.heldOverNight == null
-                          ? null
-                          : (l?.readinessDetailLastNightScored(
-                                  prettyDay(d.heldOverNight, l)) ??
-                              'The last night scored was '
-                                  '${prettyDay(d.heldOverNight, l)}.')) ??
-                  const SizedBox.shrink(),
-              if (d.absentDiag != null)
-                Section(
-                    l?.readinessDetailWhatWasMissing ?? 'What was missing',
-                    _absence(
-                      c,
-                      p,
-                      d.absentDiag!,
-                      fallbackReason:
-                          bannerShowsDiag ? null : diagReason,
-                    )),
-            ]);
-          }),
-        ] else
-          Surface(
-            child: Column(children: [
-              SizedBox(
-                width: 150,
-                height: 150,
-                child: Stack(alignment: Alignment.center, children: [
-                  CustomPaint(
-                    size: const Size(150, 150),
-                    painter: Ring(d.readiness.normalized(100), p.on(band.color),
-                        p.track,
-                        stroke: 14, t: animate(c, 1)),
-                  ),
-                  Column(mainAxisSize: MainAxisSize.min, children: [
+    // An explicit historical request stays historical; the ordinary route is
+    // still today's score and never adopts a held-over night's date.
+    return detailScaffold(
+      c,
+      l?.readinessDetailTitle ?? 'Readiness',
+      [
+        if (_loading && _d == null) ...[
+          const SizedBox(height: S.x8),
+          const Center(child: CircularProgressIndicator()),
+        ] else ...[
+          if (v == null) ...[
+            // No `why:`. The pipeline records why readiness abstained on every
+            // day it does, and the "What was missing" section directly below
+            // shows the same record in more detail. `why:` below reuses the
+            // EXACT SAME computed reason as that section (readinessInputShortfallNote
+            // off d.absentDiag) rather than a second, independently-guessed one
+            // — the two must never be able to disagree, only one be shorter.
+            // readinessUnstableBaselineNote covers the OTHER absence shape
+            // (PR #510): a z-cap withhold has no baseline shortfall to report
+            // (every input already cleared its floor), so the first function
+            // alone fell straight to the generic fallback for it.
+            Builder(
+              builder: (c) {
+                final diagReason =
+                    readinessInputShortfallNote(d.absentDiag) ??
+                    readinessUnstableBaselineNote(
+                      d.absentDiag?['note']?.toString(),
+                    );
+                // StatusCard.forMetric prefers a prose note already ON the
+                // metric (`told`, via whyFromNote) over `why:` — deliberately,
+                // for screen-authored text like the held-over "nothing synced
+                // yet" sentence [overnightMetric] attaches. When that wins, the
+                // diagnostic reason above never reaches the banner at all
+                // (PR #510 follow-up) — _absence below shows it in that one
+                // case so it is not lost from the screen entirely, without
+                // reintroducing the general "says it twice" duplication fixed
+                // earlier in this same PR. Mirrors forMetric's precedence
+                // exactly: a need_baseline note is rendered as the fix, not
+                // `told`, so `why:` still wins there; a `gap` replaces `why:`.
+                final note = d.readiness.note;
+                final bannerShowsDiag =
+                    d.heldOverNight == null &&
+                    (needMessageFromNote(note, l: l) != null ||
+                        whyFromNote(note, l: l) == null);
+                return Column(
+                  children: [
+                    StatusCard.forMetric(
+                          l?.readinessDetailNotScoredTitle ??
+                              'Readiness is not scored',
+                          d.readiness,
+                          l: l,
+                          why: diagReason ?? '',
+                          // Where the data stops, appended to whatever the
+                          // pipeline said. Not a substitute for the reason and
+                          // not a reading — "the last one was Saturday" is a
+                          // fact about coverage.
+                          gap: d.heldOverNight == null
+                              ? null
+                              : (l?.readinessDetailLastNightScored(
+                                      prettyDay(d.heldOverNight, l),
+                                    ) ??
+                                    'The last night scored was '
+                                        '${prettyDay(d.heldOverNight, l)}.'),
+                        ) ??
+                        const SizedBox.shrink(),
+                    if (d.absentDiag != null)
+                      Section(
+                        l?.readinessDetailWhatWasMissing ?? 'What was missing',
+                        _absence(
+                          c,
+                          p,
+                          d.absentDiag!,
+                          fallbackReason: bannerShowsDiag ? null : diagReason,
+                        ),
+                      ),
+                  ],
+                );
+              },
+            ),
+          ] else
+            Surface(
+              child: Column(
+                children: [
+                  if (bigText(c)) ...[
                     Text('${v.round()}', style: F.n48.copyWith(color: p.ink)),
                     Text(band.label, style: F.cap.copyWith(color: p.ink3)),
-                  ]),
-                ]),
+                  ] else
+                    SizedBox(
+                      width: 150,
+                      height: 150,
+                      child: Stack(
+                        alignment: Alignment.center,
+                        children: [
+                          CustomPaint(
+                            size: const Size(150, 150),
+                            painter: Ring(
+                              d.readiness.normalized(100),
+                              p.on(band.color),
+                              p.track,
+                              stroke: 14,
+                              t: animate(c, 1),
+                            ),
+                          ),
+                          Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${v.round()}',
+                                style: F.n48.copyWith(color: p.ink),
+                              ),
+                              Text(
+                                band.label,
+                                style: F.cap.copyWith(color: p.ink3),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
-            ]),
-          ),
-
-        if (d.breakdown.isNotEmpty) ...[
-          Section(l?.readinessDetailWhatWentIntoIt ?? 'What went into it',
-              _breakdown(c, p, d)),
-          // Only when the headline above is absent: the footer's "parallel
-          // view, not slices of the number above" caveat is true either way,
-          // but it sits BELOW four rows of real-looking numbers and is easy
-          // to skim past — exactly the gap this file's own header comment
-          // warns about ("presenting the second as if it decomposed the
-          // first would be a small lie that is very hard to catch"). When
-          // there is no score to misread this against, say so up front too.
-          if (v == null) ...[
-            const SizedBox(height: S.x2),
-            Text(
-              l?.readinessDetailBreakdownNoScoreNote ??
-                  'These are a separate, looser-gated view of the same four '
-                      'inputs — they do not add up to today\'s score, which '
-                      'is absent above for the reason already given.',
-              style: F.cap.copyWith(color: p.ink3, height: 1.5),
             ),
-          ],
-          const SizedBox(height: S.x4),
-          Surface(
-            elevation: 0,
-            color: p.card2,
-            child: Row(children: [
-              Expanded(
-                child: Text(
-                  l?.readinessDetailInputsFooter(
-                          d.inputsUsed, d.breakdown.length) ??
-                      '${d.inputsUsed}/${d.breakdown.length} inputs. Each one is '
-                          'ranked against your own history — a parallel view of the '
-                          'same inputs, not slices of the number above.',
-                  style: F.cap.copyWith(color: p.ink3, height: 1.5),
-                ),
+
+          if (d.breakdown.isNotEmpty) ...[
+            Section(
+              l?.readinessDetailWhatWentIntoIt ?? 'What went into it',
+              DriverBreakdown(
+                d.drivers.isNotEmpty
+                    ? d.drivers
+                    : driverFacts(breakdown: d.breakdown),
               ),
-            ]),
-          ),
-        ] else if (v != null)
+            ),
+            // Only when the headline above is absent: the footer's "parallel
+            // view, not slices of the number above" caveat is true either way,
+            // but it sits BELOW four rows of real-looking numbers and is easy
+            // to skim past — exactly the gap this file's own header comment
+            // warns about ("presenting the second as if it decomposed the
+            // first would be a small lie that is very hard to catch"). When
+            // there is no score to misread this against, say so up front too.
+            if (v == null) ...[
+              const SizedBox(height: S.x2),
+              Text(
+                l?.readinessDetailBreakdownNoScoreNote ??
+                    'These are a separate, looser-gated view of the same four '
+                        'inputs — they do not add up to today\'s score, which '
+                        'is absent above for the reason already given.',
+                style: F.cap.copyWith(color: p.ink3, height: 1.5),
+              ),
+            ],
+            const SizedBox(height: S.x4),
+            Surface(
+              elevation: 0,
+              color: p.card2,
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      l?.readinessDetailInputsCount(
+                            d.inputsUsed,
+                            d.breakdown.length,
+                          ) ??
+                          '${d.inputsUsed} of ${d.breakdown.length} inputs available',
+                      style: F.cap.copyWith(color: p.ink3, height: 1.5),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ] else if (v != null)
+            Section(
+              l?.readinessDetailWhatWentIntoIt ?? 'What went into it',
+              StatusCard(
+                l?.readinessDetailNoBreakdownTitle ?? 'No breakdown yet',
+                d.day != null
+                    ? (l?.homeMetricNoBreakdown ??
+                          'No recorded breakdown for this day')
+                    : l?.readinessDetailNoBreakdownBody ??
+                          'Ranking each input against your own history takes about two '
+                              'weeks of nights.',
+                icon: LucideIcons.listTree,
+              ),
+            ),
+
+          // The header used to say "Last 90 days" over a chart of five points.
+          // It says what is drawn.
           Section(
-            l?.readinessDetailWhatWentIntoIt ?? 'What went into it',
-            StatusCard(
-              l?.readinessDetailNoBreakdownTitle ?? 'No breakdown yet',
-              l?.readinessDetailNoBreakdownBody ??
-                  'Ranking each input against your own history takes about two '
-                      'weeks of nights.',
-              icon: LucideIcons.listTree,
-            ),
+            _historyTitle(c, d),
+            !d.series.any((v) => v?.isFinite == true)
+                ? StatusCard(
+                    l?.readinessDetailNoHistoryTitle ?? 'No readiness history',
+                    l?.readinessDetailNoHistoryBody ?? '0 days scored.',
+                    fix:
+                        l?.readinessDetailWearOvernight ??
+                        'Wear the band overnight',
+                    icon: LucideIcons.chartLine,
+                  )
+                : Surface(child: _history(c, d)),
           ),
-
-        // The header used to say "Last 90 days" over a chart of five points.
-        // It says what is drawn.
-        Section(
-          _historyTitle(c, d),
-          !d.series.any((v) => v != null)
-              ? StatusCard(
-                  l?.readinessDetailNoHistoryTitle ?? 'No readiness history',
-                  l?.readinessDetailNoHistoryBody ?? '0 days scored.',
-                  fix: l?.readinessDetailWearOvernight ?? 'Wear the band overnight',
-                  icon: LucideIcons.chartLine,
-                )
-              : Surface(child: _history(c, d)),
-        ),
-        const SizedBox(height: S.x5),
-        investigateRow(c, () => go(c, const Investigate('readiness'))),
+          const SizedBox(height: S.x5),
+          investigateRow(
+            c,
+            null,
+            destination: Investigate('readiness', day: d.day),
+          ),
+        ],
       ],
-    ]);
+      sub: d.day == null ? '' : prettyDay(d.day, l),
+    );
   }
 
   /// The last 90 CALENDAR days, trimmed to start at the first day that
   /// actually has a score — so the x labels span real dates and the empty run
   /// before the first sync is not drawn as ninety missing days.
   List<double?> _window(ReadinessData d) {
-    final first = d.series.indexWhere((v) => v != null);
-    return first <= 0 ? d.series : d.series.sublist(first);
+    final finite = [for (final v in d.series) v?.isFinite == true ? v : null];
+    final first = finite.indexWhere((v) => v != null);
+    return first <= 0 ? finite : finite.sublist(first);
   }
 
   String _historyTitle(BuildContext c, ReadinessData d) {
     final l = AppLocalizations.of(c);
-    final n = d.series.any((v) => v != null) ? _window(d).length : 0;
+    final n = d.series.any((v) => v?.isFinite == true) ? _window(d).length : 0;
     return n == 0
         ? (l?.readinessDetailHistoryTitle ?? 'History')
-        : (l?.readinessDetailLastNDays(n) ??
-            'Last $n day${n == 1 ? '' : 's'}');
+        : (l?.readinessDetailLastNDays(n) ?? 'Last $n day${n == 1 ? '' : 's'}');
   }
 
   Widget _history(BuildContext c, ReadinessData d) {
@@ -328,25 +461,84 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
     const axis = AxisSpec(min: 0, max: 100, ticks: 3, format: axisInt);
     final p = P.of(c);
     final l = AppLocalizations.of(c);
-    return ChartFrame(
-      title: l?.readinessDetailTitle ?? 'Readiness',
-      unit: l?.readinessDetailUnit ?? '/100',
-      height: 120,
-      yAxis: axis,
-      // Slot 0 is `length - 1` days behind today, not `length` — the last slot
-      // IS today. MetricDetail draws the same `recovery` series and already
-      // counts it this way; the two screens dated one chart differently.
-      xLabels: [
-        l?.readinessDetailDaysAgo(win.length - 1) ??
-            '${win.length - 1} day${win.length == 2 ? '' : 's'} ago',
-        l?.readinessDetailToday ?? 'Today',
+    final pick = _historyPick?.clamp(0, win.length - 1);
+    int slot(double v) => win.length < 2
+        ? 0
+        : (v * (win.length - 1)).round().clamp(0, win.length - 1);
+    double position(int i) => win.length < 2 ? 0 : i / (win.length - 1);
+    String day(int i) {
+      final end = DateTime.parse(d.historyEnd ?? d.day ?? _openedDay);
+      return dayLabelOf(
+        DateTime(end.year, end.month, end.day - (win.length - 1 - i)),
+      );
+    }
+
+    String reading(int i) {
+      final date = prettyDay(day(i), l);
+      final value = win[i];
+      return value == null
+          ? l?.metricDetailSlotNoRecord(date) ?? '$date, no record'
+          : l?.metricDetailSlotWithValue(
+                  date,
+                  metricValue('', value, l),
+                  l.readinessDetailUnit,
+                ) ??
+                '$date, ${metricValue('', value, l)} /100';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        ChartFrame(
+          title: l?.readinessDetailTitle ?? 'Readiness',
+          unit: l?.readinessDetailUnit ?? '/100',
+          height: 120,
+          yAxis: axis,
+          // Slot 0 is `length - 1` days behind today, not `length` — the last slot
+          // IS today. MetricDetail draws the same `recovery` series and already
+          // counts it this way; the two screens dated one chart differently.
+          xLabels: [
+            prettyDay(day(0), l),
+            day(win.length - 1) == todayLabel()
+                ? (l?.readinessDetailToday ?? 'Today')
+                : prettyDay(day(win.length - 1), l),
+          ],
+          series: win,
+          child: Scrubber(
+            key: const ValueKey('recovery-history-scrubber'),
+            value: pick == null ? null : position(pick),
+            step: win.length < 2 ? 1 : 1 / (win.length - 1),
+            label: l?.readinessDetailTitle ?? 'Readiness',
+            describe: (v) => reading(slot(v)),
+            longPressToScrub: true,
+            onChanged: (v) => setState(() => _historyPick = slot(v)),
+            child: RepaintBoundary(
+              child: CustomPaint(
+                size: Size.infinite,
+                painter: LineChart(
+                  win,
+                  p.on(C.green),
+                  dots: false,
+                  t: animate(c, 1),
+                  axis: axis,
+                  selectedX: pick == null ? null : position(pick),
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (pick != null) ...[
+          const SizedBox(height: S.x3),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              reading(pick),
+              key: const ValueKey('recovery-history-reading'),
+              style: F.cap.copyWith(color: p.ink),
+            ),
+          ),
+        ],
       ],
-      series: win,
-      child: CustomPaint(
-        size: Size.infinite,
-        painter: LineChart(win, p.on(C.green), dots: false, t: animate(c, 1),
-            axis: axis),
-      ),
     );
   }
 
@@ -383,111 +575,44 @@ class _ReadinessDetailState extends State<ReadinessDetail> {
     }
 
     if (rows.isEmpty) return const SizedBox.shrink();
-    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      Surface(
-        pad: const EdgeInsets.symmetric(horizontal: S.x4),
-        child: Column(
-          // Explicit, not the default `center`: each row's inner Column
-          // shrink-wraps to its own (narrow) text width, same as every row
-          // in `_breakdown` below it — the difference is that `_breakdown`'s
-          // rows are a `Row` (fills the full width by default regardless of
-          // the parent's alignment), so only this Column needed the
-          // alignment said out loud for the two sections to actually match.
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            for (var i = 0; i < rows.length; i++) ...[
-              if (i > 0) Divider(color: p.line, height: 1),
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: S.x3),
-                child: Column(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Surface(
+          pad: const EdgeInsets.symmetric(horizontal: S.x4),
+          child: Column(
+            // Explicit, not the default `center`: each row's inner Column
+            // shrink-wraps to its own (narrow) text width, same as every row
+            // in `_breakdown` below it — the difference is that `_breakdown`'s
+            // rows are a `Row` (fills the full width by default regardless of
+            // the parent's alignment), so only this Column needed the
+            // alignment said out loud for the two sections to actually match.
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (var i = 0; i < rows.length; i++) ...[
+                if (i > 0) Divider(color: p.line, height: 1),
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: S.x3),
+                  child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(rows[i].$1, style: F.body.copyWith(color: p.ink)),
-                      Text(rows[i].$2,
-                          style: F.over.copyWith(color: p.ink3)),
-                    ]),
-              ),
+                      Text(rows[i].$2, style: F.over.copyWith(color: p.ink3)),
+                    ],
+                  ),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
-      ),
-      if (fallbackReason != null) ...[
-        const SizedBox(height: S.x3),
-        Text(fallbackReason, style: F.cap.copyWith(color: p.ink3, height: 1.5)),
-      ],
-    ]);
-  }
-
-  Widget _breakdown(BuildContext c, P p, ReadinessData d) {
-    final rows = d.breakdown;
-    // THE WEIGHT THAT WAS USED, not the catalog weight. The score is
-    // `wpsum / wsum` over the USABLE inputs only, so the raw .40/.30/.18/.12
-    // are what each input would have carried had everything been present — with
-    // skin temperature missing, HRV's 40% actually carried 45.5%.
-    final wsum = rows
-        .where((r) => r['used'] == true)
-        .fold<double>(0, (a, r) => a + ((r['weight'] as num?)?.toDouble() ?? 0));
-    return Surface(
-      pad: const EdgeInsets.symmetric(horizontal: S.x4),
-      child: Column(children: [
-        for (var i = 0; i < rows.length; i++) ...[
-          if (i > 0) Divider(color: p.line, height: 1),
-          _row(c, p, rows[i], wsum),
-        ],
-      ]),
-    );
-  }
-
-  Widget _row(BuildContext c, P p, Map<String, dynamic> r, double wsum) {
-    final l = AppLocalizations.of(c);
-    final key = r['label']?.toString() ?? '';
-    final raw = (r['weight'] as num?)?.toDouble();
-    final contribution = (r['weighted_contribution'] as num?);
-    final used = r['used'] == true;
-    final pastMdc = r['past_mdc'] == true;
-    // No weight, or an input that carried none, means no percentage — `?? 0`
-    // printed a confident "0% weight" for a number nobody reported.
-    final share = !used || raw == null || wsum <= 0 ? null : raw / wsum;
-
-    final parts = [
-      if (share != null)
-        l?.readinessDetailWeightPercent((share * 100).round()) ??
-            '${(share * 100).round()}% weight',
-      if (!used) l?.readinessDetailNotAvailable ?? 'not available',
-      if (used && contribution == null)
-        l?.readinessDetailContributionNotReported ?? 'contribution not reported',
-      // The temperature input is a raw sensor deviation, not a calibrated
-      // temperature. It gets said, every time.
-      if (key == 'temp')
-        l?.readinessDetailRelativeUncalibrated ?? 'relative, uncalibrated',
-      // An unlabelled glyph is not an explanation. This is the
-      // smallest-worthwhile-change gate, so it says what it means.
-      if (used && !pastMdc)
-        l?.readinessDetailWithinSpread ?? 'within your usual spread',
-    ];
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: S.x3),
-      child: Row(children: [
-        Expanded(
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(driverLabel(key), style: F.body.copyWith(color: p.ink)),
-            Text(parts.join(' · '),
-                style: F.over.copyWith(color: p.ink3)),
-          ]),
-        ),
-        // No contribution number means no number — never a bare em-dash. The
-        // sub-line above says which case it is.
-        if (used && contribution != null) ...[
-          const SizedBox(width: S.x3),
+        if (fallbackReason != null) ...[
+          const SizedBox(height: S.x3),
           Text(
-            '${contribution >= 0 ? '+' : '−'}'
-            '${contribution.abs().toStringAsFixed(1)}',
-            style: F.n17.copyWith(
-                color: p.on(contribution >= 0 ? C.green : C.orange)),
+            fallbackReason,
+            style: F.cap.copyWith(color: p.ink3, height: 1.5),
           ),
         ],
-      ]),
+      ],
     );
   }
 }

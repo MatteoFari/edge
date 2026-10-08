@@ -1,7 +1,7 @@
 // Wellness — softer than Health, same system.
 //
 // Health tells you what your body did. Wellness is where you tell it back, and
-// where the app explains itself. Five sub-tabs: Mind, Recovery, Habits,
+// where the app explains itself. Four sub-tabs: Today, Habits,
 // Medication, Cycle. Cycle is a SUB-TAB and not a sixth shell tab — see
 // `app_shell.dart`; anything that feels like a sixth domain belongs inside the
 // domain that owns it.
@@ -27,18 +27,15 @@ import '../../data/day_label.dart';
 import '../../data/journal_fields.dart';
 import '../../data/med_store.dart';
 import '../../l10n/app_localizations.dart';
-import '../../models/metric.dart' show whyFromNote;
 import '../../state/app_state.dart';
 import '../../stress/breath_phases.dart';
 import '../ui2.dart';
 import 'calm_breathing.dart';
-import 'driver_breakdown.dart';
 import 'cycle_screen.dart';
-import 'home_screen.dart' show envValue, metricOf, weekdayShortName;
+import 'home_screen.dart' show weekdayShortName;
 import 'journal_compose.dart';
 import 'start_card.dart';
 import 'metric_detail.dart' show detailScaffold;
-import 'sleep_detail.dart';
 
 class WellnessScreen extends StatefulWidget {
   const WellnessScreen({super.key});
@@ -68,9 +65,10 @@ class WellnessScreen extends StatefulWidget {
   ///
   /// Fallback labels only — index bookkeeping uses `.length`, and the actual
   /// display labels are localized in `build`.
-  static const tabs = ['Mind', 'Recovery', 'Habits', 'Medication', 'Cycle'];
+  static const tabs = ['Today', 'Habits', 'Medication', 'Cycle'];
+  static const _tabIds = ['today', 'habits', 'medication', 'cycle'];
 
-  static const int medsTab = 3;
+  static const int medsTab = 2;
 
   @override
   State<WellnessScreen> createState() => _WellnessScreenState();
@@ -89,19 +87,13 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
   /// midnight and habit ticks would land on yesterday's date.
   String get _date => todayLabel();
   bool _loading = true;
+  bool _loadError = false;
 
   /// One journal write at a time. `putJournalMetrics` deletes the day and
   /// re-inserts it, so two quick taps both read the same day and the second
   /// erased the first.
   bool _writingField = false;
 
-  Map<String, dynamic> _stress = const {};
-  Map<String, dynamic> _insights = const {};
-
-  /// The four readiness inputs, each already carrying its reading, this user's
-  /// own centre and spread, the signed contribution and the MDC gate. Assembled
-  /// by [driverFacts] from three stored things; nothing here computes.
-  List<DriverFacts> _drivers = const [];
   Map<String, JournalMetricValue> _todayFields = {};
   List<JournalFieldSpec> _habits = const [];
   List<JournalFieldSpec> _fields = const [];
@@ -133,7 +125,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
     super.dispose();
   }
 
-  /// Readiness drivers, insights and journal metrics all move under this tab
+  /// Journal fields and medication entries move under this tab
   /// when a derive or an import runs — and it is one of the three the shell
   /// keeps alive forever, so it read them once and stopped.
   @override
@@ -150,188 +142,167 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
   }
 
   Future<void> _load() async {
-    final t = beginRead(#wellness);
+    if (!mounted) return;
+    final token = beginRead(#wellness);
     final app = context.read<AppState>();
     final repo = app.repo;
-    final db = await LocalDb.instance;
-
-    final meds = await MedDb.defs(db);
-    final doses = await MedDb.dosesForDay(db, _date);
-    final adherence = await MedDb.adherenceWindow(db, days: 7);
-    final breathing = await app.breathingHistory(limit: 5);
-
-    var stress = const <String, dynamic>{};
-    var insights = const <String, dynamic>{};
-    var fields = <String, JournalMetricValue>{};
-    var driverRows = const <DriverFacts>[];
-    var specs = const <JournalFieldSpec>[];
-    if (repo != null) {
-      stress = await repo.getDayStress(_date);
-      insights = await repo.getInsights();
-      // `readiness_glassbox.breakdown`, NOT `.drivers` — drivers is already
-      // filtered to the inputs that cleared the smallest-worthwhile-change
-      // gate, so an input that sat inside its usual spread was never in it and
-      // the screen could not say "and this one did nothing". Same array
-      // ReadinessDetail renders, so the two agree by construction.
-      final gb = envValue(insights['readiness_glassbox']);
-      final bd = gb?['breakdown'];
-      // The baselines block: centre, spread, delta and MDC per input. Written
-      // on every derive since long before anything read it.
-      final heart = await repo.getDayHeart(_date);
-      final charts = <String, Object?>{};
-      for (final k in driverChartKeys) {
-        charts[k] = await repo.getChart(k);
-      }
-      driverRows = driverFacts(
-        breakdown: [
-          for (final r in (bd is List ? bd : const []))
-            if (r is Map) r.cast<String, dynamic>(),
-        ],
-        baselines: heart['baselines'] is Map
-            ? (heart['baselines'] as Map).cast<String, dynamic>()
-            : null,
-        charts: charts,
-      );
-      fields = await repo.getJournalMetrics(_date);
-      specs = await repo.getJournalFields();
-    }
-    // Day arithmetic, not a subtracted duration: a DST day is 23 or 25 hours
-    // long and `now - 13 days` lands on the wrong calendar date across one.
     final now = DateTime.now();
-    final since = dayLabelOf(
-      DateTime(now.year, now.month, now.day - (_habitDays - 1)),
-    );
-    final history = await LocalDb.journalMetricsByDay(sinceDaysEpoch: since);
-
-    if (!stillNewest(#wellness, t)) return;
+    final date = dayLabelOf(now);
     setState(() {
-      _meds = meds;
-      _slots = slotsForDay(meds, _date, doses, now: DateTime.now());
-      _adherence = adherence;
-      _breathing = breathing;
-      _stress = stress;
-      _insights = insights;
-      _drivers = driverRows;
-      _todayFields = {...fields};
-      // A habit is a custom field with a ceiling of one — a per-day yes/no.
-      // That is exactly what journal_field_def already stores, which is why
-      // there is no habit table.
-      _habits = [
-        for (final s in specs)
-          if (s.custom && s.max == 1) s,
-      ];
-      _fields = specs;
-      _habitHistory = history;
-      _loading = false;
+      _loading = _loading || _loadError;
+      _loadError = false;
     });
+    try {
+      final db = await LocalDb.instance;
+      final meds = await MedDb.defs(db);
+      final doses = await MedDb.dosesForDay(db, date);
+      final adherence = await MedDb.adherenceWindow(db, days: 7);
+      final breathing = await app.breathingHistory(limit: 5);
+      final fields = repo == null
+          ? <String, JournalMetricValue>{}
+          : await repo.getJournalMetrics(date);
+      final specs = repo == null
+          ? <JournalFieldSpec>[]
+          : await repo.getJournalFields();
+      // Calendar arithmetic retains the intended fortnight across DST.
+      final since = dayLabelOf(
+        DateTime(now.year, now.month, now.day - (_habitDays - 1)),
+      );
+      final history = await LocalDb.journalMetricsByDay(sinceDaysEpoch: since);
+      if (!stillNewest(#wellness, token)) return;
+      // Do not commit a mixed-day snapshot if midnight passed during the read.
+      if (date != todayLabel()) {
+        unawaited(_load());
+        return;
+      }
+      setState(() {
+        _meds = meds;
+        _slots = slotsForDay(meds, date, doses, now: DateTime.now());
+        _adherence = adherence;
+        _breathing = breathing;
+        _todayFields = {...fields};
+        _habits = [
+          for (final spec in specs)
+            if (spec.custom && spec.max == 1) spec,
+        ];
+        _fields = specs;
+        _habitHistory = history;
+        _loading = false;
+      });
+    } catch (_) {
+      if (!stillNewest(#wellness, token)) return;
+      setState(() {
+        _loading = false;
+        _loadError = true;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext c) {
     final l = AppLocalizations.of(c);
     final last = _breathing.isEmpty ? null : _breathing.first;
+    final lastSeconds = _reading(last?['seconds']);
     // `select`, not `watch`: this screen lives in the shell's IndexedStack and
     // stays mounted, so a plain watch would rebuild it on every unrelated
     // AppState notification for the life of the app.
-    final showCycle =
-        c.select<AppState, bool>((a) => a.cycleTrackingEnabled);
+    final showCycle = c.select<AppState, bool>((a) => a.cycleTrackingEnabled);
     final labels = [
-      l?.wellnessTabMind ?? 'Mind',
-      l?.wellnessTabRecovery ?? 'Recovery',
+      l?.wellnessTabToday ?? 'Today',
       l?.wellnessTabHabits ?? 'Habits',
       l?.wellnessTabMedication ?? 'Medication',
       l?.wellnessTabCycle ?? 'Cycle',
     ];
     final tabs = showCycle ? labels : labels.take(labels.length - 1).toList();
     // Clamped rather than reset: switching Cycle off while standing on it
-    // lands on Medication, not back at Mind.
+    // lands on Medication, not back at Today.
     final tab = _tab.clamp(0, tabs.length - 1);
-    // Same rule as Workout: the LIST drops its side padding and hands it to
-    // every child except the hero, which is how that one runs edge to edge.
-    // The card cannot escape its own parent — a negative margin asserts and an
-    // OverflowBox takes an unbounded height in a scroll view and blanks the
-    // whole tab. Padding the siblings is ordinary layout and does neither.
-    return ListView(
-      padding: const EdgeInsets.fromLTRB(0, S.x4, 0, S.x16),
+    final inset = shellScrollPadding(
+      c,
+      const EdgeInsets.fromLTRB(0, S.x4, 0, S.x16),
+    );
+    return Column(
       children: [
-        for (final w in <Widget>[
-          ScreenTitle(l?.wellnessTitle ?? 'Wellness'),
-          SubTabs(tabs, tab, (i) => setState(() => _tab = i),
-              color: C.domMind),
-          const SizedBox(height: S.x5),
-          if (_loading)
-            const Center(child: CircularProgressIndicator())
-          else ...[
-            // Mind is the only tab here with something to START. The other
-            // four are logs and reviews, and a "begin" card over a medication
-            // list would be an invitation to nothing.
-            if (tab == 0) ...[
-              StartCard(
-                label: l?.wellnessStartASitting ?? 'START A SITTING',
-                // What the picker actually offers. Three, not the number of
-                // things on this tab.
-                count: kBreathPatterns.length,
-                noun: l?.wellnessExercisesNoun ?? 'exercises',
-                sub: last == null
-                    ? (l?.wellnessPickOneAndGo ?? 'Pick one and go')
-                    : (l?.wellnessLastMinutes(
-                            (_reading(last['seconds']) ?? 0) ~/ 60) ??
-                        'Last: ${(_reading(last['seconds']) ?? 0) ~/ 60} min'),
-                asset: 'mascot_wellness.png',
-                accent: C.domMind,
-                deep: C.teal,
-                // Sized so the CHARACTER matches Workout's, not the frame.
-                // Two corrections got us here: the asset carried ~30%
-                // transparent padding (cropped away), and what is left still
-                // has a soft halo above the head, so the figure is 87% of the
-                // frame height where the workout mascot is 100% of its own.
-                // 145 x 0.87 puts the character at ~126, the same as Workout.
-                // Not cropped tighter than this on purpose — the halo is nearly
-                // opaque, so trimming it slices a hard arc through the artwork.
-                // The 118 here was originally compensating for
-                // ~30% transparent padding baked into the asset, which made
-                // the art render a third smaller than the workout one at the
-                // same height. The asset is cropped to its own alpha bounds,
-                // so the height is the art's height and the two mascots read
-                // as the same size. Still slightly wider than tall (1.03 vs
-                // 0.93), and at 126 that is 130 px — narrower than the padded
-                // asset was, so the copy has more room than before, not less.
-                mascotHeight: 145,
-                onTap: () async {
-                  await Navigator.of(c).push(
-                    MaterialPageRoute<void>(
-                        builder: (_) => const CalmBreathing()),
-                  );
-                  await _load();
-                },
+        Padding(
+          padding: EdgeInsets.fromLTRB(S.x4, inset.top, S.x4, 0),
+          child: Column(
+            children: [
+              ScreenTitle(l?.wellnessTitle ?? 'Wellness'),
+              SubTabs(
+                tabs,
+                tab,
+                (i) => setState(() => _tab = i),
+                color: C.domMind,
               ),
-              const SizedBox(height: S.x4),
+              const SizedBox(height: S.x5),
             ],
-            [_mind, _recovery, _habitsTab, _medication, _cycle][tab](c),
-          ],
-        ])
-          if (w is StartCard)
-            w
-          else
-            Padding(
-                padding: const EdgeInsets.symmetric(horizontal: S.x4),
-                child: w),
+          ),
+        ),
+        Expanded(
+          child: SubPages(
+            index: tab,
+            count: tabs.length,
+            onChanged: (i) => setState(() => _tab = i),
+            builder: (c, i) => ListView(
+              key: PageStorageKey('wellness-${WellnessScreen._tabIds[i]}'),
+              padding: EdgeInsets.fromLTRB(S.x4, 0, S.x4, inset.bottom),
+              children: [
+                for (final w in <Widget>[
+                  if (_loading)
+                    const Center(child: CircularProgressIndicator())
+                  else if (_loadError)
+                    StatusCard(
+                      l?.wellnessLoadErrorTitle ?? 'Could not load Wellness',
+                      l?.wellnessLoadErrorBody ??
+                          'Your saved entries could not be read. Try again.',
+                      fix: l?.healthTryAgain ?? 'Try again',
+                      icon: LucideIcons.refreshCw,
+                      onFix: _load,
+                    )
+                  else ...[
+                    if (i == 0) ...[
+                      StartCard(
+                        label: l?.wellnessStartASitting ?? 'START A SITTING',
+                        // Count the patterns the breathing picker actually offers.
+                        count: kBreathPatterns.length,
+                        noun: l?.wellnessExercisesNoun ?? 'exercises',
+                        sub: lastSeconds == null || lastSeconds < 0
+                            ? (l?.wellnessPickOneAndGo ?? 'Pick one and go')
+                            : (l?.wellnessLastMinutes(lastSeconds ~/ 60) ??
+                                  'Last: ${lastSeconds ~/ 60} min'),
+                        icon: LucideIcons.wind,
+                        actionLabel: l?.calmBreathingBegin ?? 'Begin',
+                        accent: C.domMind,
+                        onNavigate: (open) async {
+                          await open<void>(const CalmBreathing());
+                          if (mounted) await _load();
+                        },
+                      ),
+                      const SizedBox(height: S.x4),
+                    ],
+                    [_today, _habitsTab, _medication, _cycle][i](c),
+                  ],
+                ])
+                  w,
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }
 
-  // ── MIND ─────────────────────────────────────────────────────────────────
+  // ── TODAY ─────────────────────────────────────────────────────────────────
 
-  Widget _mind(BuildContext c) {
+  Widget _today(BuildContext c) {
     final l = AppLocalizations.of(c);
-    // Same rule as `_recovery`'s coach block, and for the same reason: this
-    // runs inside `build`, so a leaf of the wrong type here costs the whole
-    // screen rather than this one card. See [_reading].
-    final stress = _stress['stress'];
-    final score = _reading(stress is Map ? stress['score'] : null);
-    final level = stress is Map && stress['level'] is String
-        ? _stressLevelLabel(l, stress['level'] as String)
-        : null;
+    final completed = _habits
+        .where((h) => (_todayFields[h.key]?.value ?? 0) >= 1)
+        .length;
+    final due = _slots.where((slot) => slot.state == DoseState.missed).length;
+    final upcoming = _slots
+        .where((slot) => slot.state == DoseState.upcoming)
+        .length;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -352,34 +323,35 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
           l?.wellnessOpen ?? 'Open',
           LucideIcons.notebookPen,
           C.blue,
-          onTap: () async {
-            await Navigator.of(c).push(
-              MaterialPageRoute<void>(builder: (_) => const JournalCompose()),
-            );
-            await _load();
+          onNavigate: (open) async {
+            await open<void>(const JournalCompose());
+            if (mounted) await _load();
           },
         ),
-        Section(
-          l?.wellnessStressLastNight ?? 'Stress last night',
-          score == null
-              // "Last night had none" was a claim about a gate this screen
-              // never read — the stress payload carries no reason, so the card
-              // states what stress IS and stops there.
-              ? StatusCard(
-                  l?.wellnessNoStressTitle ?? 'No stress reading last night',
-                  l?.wellnessNoStressBody ??
-                      'Stress is read from beat timing while you were resting '
-                          'overnight, and last night produced no reading.',
-                  icon: LucideIcons.activity,
-                )
-              : SignalCard(
-                  LucideIcons.activity,
-                  C.purple,
-                  l?.wellnessAutonomicTension ?? 'Autonomic tension',
-                  score.round().toString(),
-                  unit: '/100',
-                  sub: (level ?? '').toUpperCase(),
-                ),
+        const SizedBox(height: S.x4),
+        ActionCard(
+          l?.wellnessTabHabits ?? 'Habits',
+          _habits.isEmpty
+              ? (l?.wellnessAddAHabit ?? 'Add a habit')
+              : (l?.wellnessHabitsToday(completed, _habits.length) ??
+                    '$completed of ${_habits.length} completed today'),
+          l?.wellnessOpen ?? 'Open',
+          LucideIcons.circleCheck,
+          C.domMind,
+          onTap: () => setState(() => _tab = 1),
+        ),
+        const SizedBox(height: S.x3),
+        ActionCard(
+          l?.wellnessTabMedication ?? 'Medication',
+          _meds.isEmpty
+              ? (l?.wellnessNothingScheduledBody ??
+                    'Add what you take and when.')
+              : (l?.wellnessMedicationToday(due, upcoming) ??
+                    '$due due now · $upcoming upcoming'),
+          l?.wellnessOpen ?? 'Open',
+          LucideIcons.pill,
+          C.blue,
+          onTap: () => setState(() => _tab = WellnessScreen.medsTab),
         ),
       ],
     );
@@ -390,7 +362,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
     // Not `.toLowerCase()`: these are user-entered/localized field labels
     // (acronyms like HRV, or nouns a language capitalizes) — lowercasing
     // them here would corrupt content the join has no business rewriting.
-    final names = [for (final f in _fields) f.label];
+    final names = [for (final f in _fields) f.localizedLabel(AppLocalizations.of(context))];
     if (names.isEmpty) {
       return l?.wellnessJournalDefaultSubtitle ??
           'Anything you want to remember about today';
@@ -407,6 +379,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
 
   Future<void> _setField(String key, double? v) async {
     final repo = context.read<AppState>().repo;
+    final date = _date;
     if (repo == null || _writingField) return;
     setState(() => _writingField = true);
     try {
@@ -418,146 +391,23 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
       // field written since. Open Wellness, go and write your journal from the
       // compose screen, come back without the tab reloading, tick one habit,
       // and the journal entry was gone.
-      final next = {...await repo.getJournalMetrics(_date)};
+      final next = {...await repo.getJournalMetrics(date)};
       if (v == null) {
         next.remove(key);
       } else {
         next[key] = JournalMetricValue(v);
       }
-      await repo.postJournalMetrics(_date, next);
+      await repo.postJournalMetrics(date, next);
       await _wrote();
     } finally {
       if (mounted) setState(() => _writingField = false);
     }
   }
 
-  // ── RECOVERY ─────────────────────────────────────────────────────────────
-
-  Widget _recovery(BuildContext c) {
-    final l = AppLocalizations.of(c);
-    final coach = _insights['sleep_coach'];
-    final coachMap = coach is Map ? coach.cast<String, dynamic>() : null;
-    final needSec = _nested(coachMap, 'need', 'need_sec');
-    final bedMin = _nested(coachMap, 'bedtime', 'bedtime_min_of_day');
-    final wakeMin = _nested(coachMap, 'wake', 'wake_min_of_day');
-    final napMin = _reading(coachMap?['nap_credit_min']);
-    final strainMin = _reading(coachMap?['strain_bonus_min']);
-    final debtH = _nested(_insights, 'sleep_debt', 'debt_hours');
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        // The one recommendation on this screen, and only when all three of
-        // its inputs are real: a measured debt worth acting on, a learned need,
-        // and a target bedtime to name. No debt, no card — the widget does not
-        // get an invented reason so that it can appear.
-        if (debtH != null && debtH >= .75 && needSec != null && bedMin != null)
-          Padding(
-            padding: const EdgeInsets.only(bottom: S.x5),
-            child: Recommendation(
-              l?.wellnessTurnInBy(formatMinuteOfDay(bedMin.round())) ??
-                  'Turn in by ${formatMinuteOfDay(bedMin.round())}',
-              l?.wellnessDebtBody(_hm(debtH * 60), _hm(needSec / 60)) ??
-                  'You are ${_hm(debtH * 60)} down against your own need, and '
-                      'tonight\'s is ${_hm(needSec / 60)}.',
-              l?.wellnessSeeWhatLastNightCost ?? 'See what last night cost you',
-              color: C.indigo,
-              onTap: () => Navigator.of(c).push(
-                MaterialPageRoute<void>(builder: (_) => const SleepDetail()),
-              ),
-            ),
-          ),
-        Section(
-          l?.wellnessWhatChargedAndDrained ?? 'What charged and drained you',
-          // Two words and a full stop, before: "hrv", "rhr". No reading, no
-          // usual, no direction, no size, and no way to tell a move that
-          // mattered from one inside the noise — all of which were already
-          // being written on every derive and read by nothing.
-          _drivers.isEmpty
-              ? StatusCard(
-                  l?.wellnessNoDriversTitle ?? 'No readiness drivers yet',
-                  whyFromNote(metricOf(_stress['readiness']).note) ??
-                      (l?.wellnessNoDriversBody ??
-                          'Needs enough nights to know what normal looks like '
-                              'for you.'),
-                  icon: LucideIcons.sparkles,
-                )
-              : DriverBreakdown(_drivers),
-        ),
-        Section(
-          l?.wellnessSleepNeedTonight ?? 'Sleep need tonight',
-          needSec == null
-              // The coach's own reason for the absent need — it names the
-              // input that is actually missing. "Not enough of them yet" named
-              // nothing, and was printed for every cause the estimator has.
-              ? StatusCard(
-                  l?.wellnessNoSleepNeedTitle ?? 'No sleep need yet',
-                  whyFromNote(_noteOf(coachMap?['need'])) ??
-                      (l?.wellnessNoSleepNeedBody ??
-                          'Nothing recorded says why there is no need for '
-                              'tonight.'),
-                  icon: LucideIcons.bedDouble,
-                )
-              : Surface(
-                  child: Column(
-                    children: [
-                      MetricRow(
-                        LucideIcons.bedDouble,
-                        C.blue,
-                        l?.wellnessTonightsNeed ?? 'Tonight\'s need',
-                        _hm(needSec / 60),
-                      ),
-                      // Null here means "we do not know", which is why it is a
-                      // missing row rather than "+0 min".
-                      if (debtH != null)
-                        MetricRow(
-                          LucideIcons.trendingDown,
-                          C.orange,
-                          l?.wellnessSleepDebt ?? 'Sleep debt',
-                          _hm(debtH * 60),
-                        ),
-                      if (strainMin != null)
-                        MetricRow(
-                          LucideIcons.flame,
-                          C.purple,
-                          l?.wellnessAddedForStrain ?? 'Added for strain',
-                          '${strainMin.round()}',
-                          unit: 'min',
-                        ),
-                      if (napMin != null)
-                        MetricRow(
-                          LucideIcons.sun,
-                          C.yellow,
-                          l?.wellnessCreditedFromNaps ?? 'Credited from naps',
-                          '${napMin.round()}',
-                          unit: 'min',
-                        ),
-                      if (bedMin != null)
-                        MetricRow(
-                          LucideIcons.moon,
-                          C.indigo,
-                          l?.wellnessTargetBedtime ?? 'Target bedtime',
-                          formatMinuteOfDay(bedMin.round()),
-                        ),
-                      if (wakeMin != null)
-                        MetricRow(
-                          LucideIcons.sunrise,
-                          C.orange,
-                          l?.wellnessTargetWake ?? 'Target wake',
-                          formatMinuteOfDay(wakeMin.round()),
-                        ),
-                    ],
-                  ),
-                ),
-        ),
-      ],
-    );
-  }
-
   // ── CYCLE ────────────────────────────────────────────────────────────────
 
   /// Owns its own load: the tab is off for most users and its query touches two
-  /// tables plus 120 derived days, which nobody should pay for by opening Mind.
+  /// tables plus 120 derived days, which nobody should pay for by opening Today.
   Widget _cycle(BuildContext c) => const CycleTab();
 
   // ── HABITS ───────────────────────────────────────────────────────────────
@@ -592,7 +442,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
                       Pressable(
                         semanticLabel:
                             l?.wellnessRemoveHabitSemantic(h.label) ??
-                                'Remove ${h.label}',
+                            'Remove ${h.label}',
                         onTap: () => _confirmRemoveHabit(h),
                         child: Padding(
                           padding: const EdgeInsets.only(right: S.x3),
@@ -650,9 +500,7 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
           l?.wellnessOpen ?? 'Open',
           LucideIcons.scatterChart,
           C.domMind,
-          onTap: () => Navigator.of(c).push(
-            MaterialPageRoute<void>(builder: (_) => const JournalFindings()),
-          ),
+          destination: const JournalFindings(),
         ),
       ],
     );
@@ -676,9 +524,10 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
     final l = AppLocalizations.of(context);
     final ok = await confirmRemove(
       context,
-      title: l?.wellnessRemoveHabitConfirmTitle(h.label) ??
-          'Remove ${h.label}?',
-      body: l?.wellnessRemoveHabitConfirmBody ??
+      title:
+          l?.wellnessRemoveHabitConfirmTitle(h.label) ?? 'Remove ${h.label}?',
+      body:
+          l?.wellnessRemoveHabitConfirmBody ??
           'It stops being asked. The days you already recorded stay.',
     );
     if (!ok || !mounted) return;
@@ -841,11 +690,8 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
 
   /// One scheduled time that is not due today: what it is, and when it is due.
   ///
-  /// Tapping goes straight to the schedule and NOT to `_medActions` — a slot
-  /// that is not due cannot be taken or skipped, and offering either would
-  /// write a dose row for a day the medication was never scheduled on.
-  /// Changing when it is due is the only honest action here, and it is also
-  /// the one that brings the tracker back.
+  /// The row edits the schedule; its separate menu also permits removal.
+  /// A day without a scheduled dose never offers take or skip actions.
   Widget _scheduleRow(BuildContext c, MedDef d, MedSchedule sch) {
     final slot = MedSlot(
       def: d,
@@ -853,12 +699,27 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
       slotMin: sch.minuteOfDay,
       state: DoseState.upcoming,
     );
-    return _SheetAction(
-      LucideIcons.pill,
-      d.label,
-      // `timeLabel`, so the two halves of this tab print a time the same way.
-      sub: '${_daysLabel(c, sch.days)} · ${slot.timeLabel}',
-      onTap: () => _editSchedule(c, slot),
+    return Row(
+      children: [
+        Expanded(
+          child: _SheetAction(
+            LucideIcons.pill,
+            d.label,
+            sub: '${_daysLabel(c, sch.days)} · ${slot.timeLabel}',
+            onTap: () => _editSchedule(c, slot),
+          ),
+        ),
+        Pressable(
+          semanticLabel:
+              AppLocalizations.of(c)?.wellnessMoreForMed(d.label) ??
+              'More for ${d.label}',
+          onTap: () => _medActions(c, slot, scheduledToday: false),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: S.x3),
+            child: Icon(LucideIcons.ellipsis, size: 18, color: P.of(c).ink3),
+          ),
+        ),
+      ],
     );
   }
 
@@ -896,18 +757,23 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
     await _wrote();
   }
 
-  Future<void> _medActions(BuildContext c, MedSlot s) async {
+  Future<void> _medActions(
+    BuildContext c,
+    MedSlot s, {
+    bool scheduledToday = true,
+  }) async {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
     final skipped = s.state == DoseState.skipped;
     await showModalBottomSheet<void>(
       context: c,
       backgroundColor: p.card,
+      sheetAnimationStyle: sheetMotion(c),
+      isScrollControlled: true,
       showDragHandle: true,
       builder: (sheet) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: ListView(
+          shrinkWrap: true,
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(S.x5, 0, S.x5, S.x3),
@@ -916,20 +782,21 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
                 style: F.head.copyWith(color: p.ink),
               ),
             ),
-            _SheetAction(
-              LucideIcons.circleSlash,
-              skipped
-                  ? (l?.wellnessUndoSkipped ?? 'Undo skipped')
-                  : (l?.wellnessSkippedOnPurpose ?? 'Skipped on purpose'),
-              sub: skipped
-                  ? (l?.wellnessBackToNotTaken ?? 'Back to not taken.')
-                  : (l?.wellnessRecordedAsDecision ??
-                      'Recorded as a decision, not a miss.'),
-              onTap: () {
-                Navigator.of(sheet).pop();
-                _skipDose(s);
-              },
-            ),
+            if (scheduledToday)
+              _SheetAction(
+                LucideIcons.circleSlash,
+                skipped
+                    ? (l?.wellnessUndoSkipped ?? 'Undo skipped')
+                    : (l?.wellnessSkippedOnPurpose ?? 'Skipped on purpose'),
+                sub: skipped
+                    ? (l?.wellnessBackToNotTaken ?? 'Back to not taken.')
+                    : (l?.wellnessRecordedAsDecision ??
+                          'Recorded as a decision, not a miss.'),
+                onTap: () {
+                  Navigator.of(sheet).pop();
+                  _skipDose(s);
+                },
+              ),
             _SheetAction(
               LucideIcons.calendarDays,
               l?.wellnessWhichDaysDue ?? 'Which days it is due',
@@ -941,9 +808,9 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
             ),
             _SheetAction(
               LucideIcons.trash2,
-              l?.wellnessRemoveMedTitle(s.def.label) ??
-                  'Remove ${s.def.label}',
-              sub: l?.wellnessRemoveMedBody ??
+              l?.wellnessRemoveMedTitle(s.def.label) ?? 'Remove ${s.def.label}',
+              sub:
+                  l?.wellnessRemoveMedBody ??
                   'It stops being scheduled. Marked doses stay.',
               onTap: () {
                 Navigator.of(sheet).pop();
@@ -1008,9 +875,9 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
     final l = AppLocalizations.of(context);
     final ok = await confirmRemove(
       context,
-      title: l?.wellnessRemoveMedConfirmTitle(d.label) ??
-          'Remove ${d.label}?',
-      body: l?.wellnessRemoveMedConfirmBody ??
+      title: l?.wellnessRemoveMedConfirmTitle(d.label) ?? 'Remove ${d.label}?',
+      body:
+          l?.wellnessRemoveMedConfirmBody ??
           'It stops being scheduled and stops counting towards adherence. '
               'The doses you already marked stay.',
     );
@@ -1085,55 +952,9 @@ class _WellnessScreenState extends State<WellnessScreen> with RevisionReload {
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
-/// Pull a number out of a nested `Metric` envelope whose `value` is itself an
-/// object — `{value: {need_sec: …}}`. Returns null rather than parsing the
-/// envelope as a scalar, which would read a real value object as an absence.
-double? _nested(Map<String, dynamic>? blk, String key, String field) {
-  final m = blk?[key];
-  if (m is! Map) return null;
-  final v = m['value'];
-  return _reading(v is Map ? v[field] : v);
-}
-
-/// A stored leaf as a number this screen can print, or null.
-///
-/// TESTED, NEVER CAST, and the finite check is not belt-and-braces. Every
-/// caller of this is evaluated inside `_recovery`, which `build` CALLS — so a
-/// throw here is not a broken card, it is `WellnessScreen.build` failing, the
-/// whole domain replaced by an `ErrorWidget`, and `RenderErrorBox` painting
-/// `0xF0C0C0C0` over the page. On a release build that is a flat grey screen
-/// with a working nav bar beside it and nothing anywhere that says why.
-///
-/// Two ways in, and neither is hypothetical enough to leave open:
-///   · `x as num?` tolerates null and NOTHING ELSE, so one leaf stored as a
-///     String — an older artifact, a hand-edited backup, an import — throws.
-///   · `.round()` throws `UnsupportedError` on NaN and infinity, and every
-///     number here is rounded a few lines later (`_hm`, `formatMinuteOfDay`,
-///     the strain and nap rows). `1e999` in JSON decodes to `Infinity`.
-///
-/// The write seam already learned this: `sanitizeForJson` nulls a non-finite
-/// leaf rather than letting `jsonEncode` throw, because "the artifact is a bag
-/// of independent metrics, so it must degrade one field at a time". Same rule,
-/// read side. A leaf we cannot read is ABSENT — which every branch below
-/// already renders honestly — instead of costing the screen.
-double? _reading(Object? v) => v is num && v.isFinite ? v.toDouble() : null;
-
-/// The `note` off a metric envelope, when there is one and it is prose.
-///
-/// `(x as Map?)?['note'] as String?` was two unguarded casts on the ABSENCE
-/// branch — the one that renders for every account that has no learned sleep
-/// need yet, which is the widest audience this screen has.
-String? _noteOf(Object? envelope) {
-  if (envelope is! Map) return null;
-  final note = envelope['note'];
-  return note is String ? note : null;
-}
-
-String _hm(double minutes) {
-  final sign = minutes < 0 ? '−' : '';
-  final t = minutes.abs().round();
-  return t < 60 ? '$sign${t}m' : '$sign${t ~/ 60}h ${t % 60}m';
-}
+/// A duration read from the breathing ledger, or absence for a malformed leaf.
+double? _reading(Object? value) =>
+    value is num && value.isFinite ? value.toDouble() : null;
 
 /// A label and a sentence. Used by journal findings and habit effects, both of
 /// which genuinely have only those two things.
@@ -1178,23 +999,6 @@ class DriverRow extends StatelessWidget {
   }
 }
 
-/// The pinned analytics package returns 'low'/'normal'/'elevated'/'high' —
-/// English regardless of locale. Map to the localized word before display.
-String? _stressLevelLabel(AppLocalizations? l, String raw) {
-  switch (raw) {
-    case 'low':
-      return l?.wellnessStressLevelLow ?? raw;
-    case 'normal':
-      return l?.wellnessStressLevelNormal ?? raw;
-    case 'elevated':
-      return l?.wellnessStressLevelElevated ?? raw;
-    case 'high':
-      return l?.wellnessStressLevelHigh ?? raw;
-    default:
-      return raw;
-  }
-}
-
 /// The days a dose is due, in the words a person would use. `DateTime.weekday`
 /// values, 1 = Monday; empty means every day.
 String _daysLabel(BuildContext c, List<int> days) {
@@ -1229,121 +1033,129 @@ Future<MedSchedule?> pickMedSchedule(
   return showModalBottomSheet<MedSchedule>(
     context: c,
     backgroundColor: p.card,
+    sheetAnimationStyle: sheetMotion(c),
     showDragHandle: true,
     isScrollControlled: true,
     builder: (sheet) => SafeArea(
       child: StatefulBuilder(
-        builder: (sheet, setSheet) => Padding(
-          padding: const EdgeInsets.fromLTRB(S.x5, 0, S.x5, S.x5),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text(
-                l?.wellnessWhenYouTakeIt ?? 'When you take it',
-                style: F.head.copyWith(color: p.ink),
-              ),
-              const SizedBox(height: S.x4),
-              Pressable(
-                semanticLabel: l?.wellnessChangeTheTime ?? 'Change the time',
-                onTap: () async {
-                  final at = await showTimePicker(
-                    context: sheet,
-                    initialTime: TimeOfDay(
-                      hour: (minute ~/ 60) % 24,
-                      minute: minute % 60,
-                    ),
-                  );
-                  if (at != null) {
-                    setSheet(() => minute = at.hour * 60 + at.minute);
-                  }
-                },
-                child: Container(
-                  padding: const EdgeInsets.all(S.x4),
-                  decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
-                  child: Row(
-                    children: [
-                      Icon(LucideIcons.clock, size: 17, color: p.ink3),
-                      const SizedBox(width: S.x3),
-                      Expanded(
-                        child: Text(
-                          formatMinuteOfDay(minute),
-                          style: F.n17.copyWith(color: p.ink),
-                        ),
+        builder: (sheet, setSheet) {
+          // Theme changes rebuild the open sheet without recreating its draft.
+          final p = P.of(sheet);
+          return Padding(
+            padding: const EdgeInsets.fromLTRB(S.x5, 0, S.x5, S.x5),
+            child: ListView(
+              shrinkWrap: true,
+              children: [
+                Text(
+                  l?.wellnessWhenYouTakeIt ?? 'When you take it',
+                  style: F.head.copyWith(color: p.ink),
+                ),
+                const SizedBox(height: S.x4),
+                Pressable(
+                  semanticLabel: l?.wellnessChangeTheTime ?? 'Change the time',
+                  onTap: () async {
+                    final at = await showTimePicker(
+                      context: sheet,
+                      initialTime: TimeOfDay(
+                        hour: (minute ~/ 60) % 24,
+                        minute: minute % 60,
                       ),
-                      Icon(LucideIcons.chevronRight, size: 16, color: p.ink3),
-                    ],
+                    );
+                    if (sheet.mounted && at != null) {
+                      setSheet(() => minute = at.hour * 60 + at.minute);
+                    }
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.all(S.x4),
+                    decoration: BoxDecoration(
+                      color: p.card2,
+                      borderRadius: R.controlOf(sheet),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(LucideIcons.clock, size: 17, color: p.ink3),
+                        const SizedBox(width: S.x3),
+                        Expanded(
+                          child: Text(
+                            formatMinuteOfDay(minute),
+                            style: F.n17.copyWith(color: p.ink),
+                          ),
+                        ),
+                        Icon(LucideIcons.chevronRight, size: 16, color: p.ink3),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: S.x4),
-              Text(
-                l?.wellnessWhichDays ?? 'WHICH DAYS',
-                style: F.over.copyWith(color: p.ink3),
-              ),
-              const SizedBox(height: S.x2),
-              Wrap(
-                spacing: S.x2,
-                runSpacing: S.x2,
-                children: [
-                  for (var d = 1; d <= 7; d++)
-                    Pressable(
-                      semanticLabel: weekdayShortName(d, l),
-                      onTap: () => setSheet(() {
-                        picked.contains(d) ? picked.remove(d) : picked.add(d);
-                      }),
-                      child: Container(
-                        alignment: Alignment.center,
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: S.x4,
-                          vertical: S.x2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: picked.contains(d)
-                              ? p.wash(C.domMind)
-                              : p.card2,
-                          borderRadius: R.rPill,
-                          border: Border.all(
-                            color: picked.contains(d)
-                                ? p.on(C.domMind)
-                                : p.line,
+                const SizedBox(height: S.x4),
+                Text(
+                  l?.wellnessWhichDays ?? 'WHICH DAYS',
+                  style: F.over.copyWith(color: p.ink3),
+                ),
+                const SizedBox(height: S.x2),
+                Wrap(
+                  spacing: S.x2,
+                  runSpacing: S.x2,
+                  children: [
+                    for (var d = 1; d <= 7; d++)
+                      Pressable(
+                        semanticLabel: weekdayShortName(d, l),
+                        onTap: () => setSheet(() {
+                          picked.contains(d) ? picked.remove(d) : picked.add(d);
+                        }),
+                        child: Container(
+                          alignment: Alignment.center,
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: S.x4,
+                            vertical: S.x2,
                           ),
-                        ),
-                        child: Text(
-                          weekdayShortName(d, l),
-                          style: F.cap.copyWith(
+                          decoration: BoxDecoration(
                             color: picked.contains(d)
-                                ? p.on(C.domMind)
-                                : p.ink2,
+                                ? p.wash(C.domMind)
+                                : p.card2,
+                            borderRadius: R.rPill,
+                            border: Border.all(
+                              color: picked.contains(d)
+                                  ? p.on(C.domMind)
+                                  : p.line,
+                            ),
+                          ),
+                          child: Text(
+                            weekdayShortName(d, l),
+                            style: F.cap.copyWith(
+                              color: picked.contains(d)
+                                  ? p.on(C.domMind)
+                                  : p.ink2,
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                ],
-              ),
-              const SizedBox(height: S.x3),
-              // A schedule with no days is not a schedule. Saying so beats
-              // saving one that can never come due.
-              Text(
-                picked.isEmpty
-                    ? (l?.wellnessPickAtLeastOneDay ?? 'Pick at least one day.')
-                    : (l?.wellnessDueDays(_daysLabel(c, picked.toList())) ??
-                        'Due ${_daysLabel(c, picked.toList()).toLowerCase()}.'),
-                style: F.cap.copyWith(color: p.ink3),
-              ),
-              const SizedBox(height: S.x4),
-              BigButton(
-                l?.actionSave ?? 'Save',
-                color: C.domMind,
-                onTap: picked.isEmpty
-                    ? null
-                    : () => Navigator.of(sheet).pop(
-                        MedSchedule(minute, picked.toList()..sort()),
-                      ),
-              ),
-            ],
-          ),
-        ),
+                  ],
+                ),
+                const SizedBox(height: S.x3),
+                // A schedule with no days is not a schedule. Saying so beats
+                // saving one that can never come due.
+                Text(
+                  picked.isEmpty
+                      ? (l?.wellnessPickAtLeastOneDay ??
+                            'Pick at least one day.')
+                      : (l?.wellnessDueDays(_daysLabel(c, picked.toList())) ??
+                            'Due ${_daysLabel(c, picked.toList()).toLowerCase()}.'),
+                  style: F.cap.copyWith(color: p.ink3),
+                ),
+                const SizedBox(height: S.x4),
+                BigButton(
+                  l?.actionSave ?? 'Save',
+                  color: C.domMind,
+                  onTap: picked.isEmpty
+                      ? null
+                      : () => Navigator.of(
+                          sheet,
+                        ).pop(MedSchedule(minute, picked.toList()..sort())),
+                ),
+              ],
+            ),
+          );
+        },
       ),
     ),
   );
@@ -1404,7 +1216,8 @@ class MedRow extends StatelessWidget {
     final taken = slot.state == DoseState.taken;
     return Pressable(
       onTap: onTap,
-      semanticLabel: l?.wellnessMedAtTime(slot.def.label, slot.timeLabel) ??
+      semanticLabel:
+          l?.wellnessMedAtTime(slot.def.label, slot.timeLabel) ??
           '${slot.def.label} at ${slot.timeLabel}',
       child: Padding(
         padding: const EdgeInsets.symmetric(vertical: S.x3),
@@ -1415,7 +1228,7 @@ class MedRow extends StatelessWidget {
               height: 36,
               decoration: BoxDecoration(
                 color: p.wash(C.blue),
-                borderRadius: R.rMd,
+                borderRadius: R.controlOf(c),
               ),
               child: Icon(LucideIcons.pill, size: 17, color: p.on(C.blue)),
             ),
@@ -1440,7 +1253,7 @@ class MedRow extends StatelessWidget {
               Pressable(
                 semanticLabel:
                     l?.wellnessMoreForMed(slot.def.label) ??
-                        'More for ${slot.def.label}',
+                    'More for ${slot.def.label}',
                 onTap: onMore,
                 child: Padding(
                   padding: const EdgeInsets.only(right: S.x3),
@@ -1528,6 +1341,7 @@ class _JournalFindingsState extends State<JournalFindings> {
   List<Map<String, dynamic>> _rows = const [];
   Map<String, dynamic> _weekday = const {};
   bool _loading = true;
+  bool _loadError = false;
 
   @override
   void initState() {
@@ -1542,6 +1356,11 @@ class _JournalFindingsState extends State<JournalFindings> {
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _loadError = false;
+    });
     final repo = context.read<AppState>().repo;
     if (repo == null) {
       if (mounted) setState(() => _loading = false);
@@ -1560,7 +1379,12 @@ class _JournalFindingsState extends State<JournalFindings> {
         _loading = false;
       });
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _loadError = true;
+        });
+      }
     }
   }
 
@@ -1572,6 +1396,18 @@ class _JournalFindingsState extends State<JournalFindings> {
       return detailScaffold(c, title, const [
         SizedBox(height: S.x8),
         Center(child: CircularProgressIndicator()),
+      ]);
+    }
+    if (_loadError) {
+      return detailScaffold(c, title, [
+        StatusCard(
+          l?.wellnessFindingsErrorTitle ?? 'Could not load your findings',
+          l?.wellnessFindingsErrorBody ??
+              'Your saved analysis could not be read. Try again.',
+          fix: l?.healthTryAgain ?? 'Try again',
+          icon: LucideIcons.refreshCw,
+          onFix: _load,
+        ),
       ]);
     }
     final p = P.of(c);
@@ -1669,7 +1505,14 @@ class _JournalFindingsState extends State<JournalFindings> {
         ? (l?.wellnessHigher ?? 'higher')
         : (l?.wellnessLower ?? 'lower');
     final amount = _amount((slope * per).abs(), unit);
-    return l?.wellnessHeadlineSlope(n, field, outcome, amount, direction, step) ??
+    return l?.wellnessHeadlineSlope(
+          n,
+          field,
+          outcome,
+          amount,
+          direction,
+          step,
+        ) ??
         'On the $n days you logged $field, $outcome ran '
             '$amount $direction per $step';
   }
@@ -1697,13 +1540,14 @@ class _JournalFindingsState extends State<JournalFindings> {
         journalFieldLagDays[field] ??
         (field.startsWith('caffeine') ? journalFieldLagDays['caffeine'] : null);
     if (lag == null) {
-      return l?.wellnessMatchedSameDay ?? 'Matched against the same day\'s numbers.';
+      return l?.wellnessMatchedSameDay ??
+          'Matched against the same day\'s numbers.';
     }
     return lag > 0
         ? (l?.wellnessMatchedNightFollowed ??
-            'Matched against the night that followed.')
+              'Matched against the night that followed.')
         : (l?.wellnessMatchedNightEnded ??
-            'Matched against the night that ended that morning.');
+              'Matched against the night that ended that morning.');
   }
 
   String _detail(AppLocalizations? l, Map<String, dynamic> r) {
@@ -1711,7 +1555,8 @@ class _JournalFindingsState extends State<JournalFindings> {
     if (r['binary'] == true) {
       final d = (r['cohens_d'] as num?)?.toDouble();
       final n = '${r['n_without']}';
-      final against = l?.wellnessAgainstDaysYouDidNot(n) ??
+      final against =
+          l?.wellnessAgainstDaysYouDidNot(n) ??
           'Against the $n days you did not';
       return '$against'
           '${d == null ? '' : ' · d ${d.abs().toStringAsFixed(1)}'}. $when';
@@ -1725,15 +1570,15 @@ class _JournalFindingsState extends State<JournalFindings> {
     final base = rho == null
         ? ''
         : (l?.wellnessRankCorrelation(rho.toStringAsFixed(2), ci) ??
-            'Rank correlation ${rho.toStringAsFixed(2)}$ci. ');
+              'Rank correlation ${rho.toStringAsFixed(2)}$ci. ');
     // MT-06's own ceiling, said where the finding is: `at_min` is the LAST
     // occurrence, so timing cannot tell two coffees from five, and a late
     // stressful day produces both the late coffee and the bad night.
     if (r['field'] == 'caffeine_last_min') {
       return '$base$when ${l?.wellnessCaffeineCaveat ?? 'This is your last '
-          'caffeine of the day only — two cups and five look identical '
-          'here, so "later" can quietly mean "more". A long, stressful day '
-          'produces both the late coffee and the poor night.'}';
+              'caffeine of the day only — two cups and five look identical '
+              'here, so "later" can quietly mean "more". A long, stressful day '
+              'produces both the late coffee and the poor night.'}';
     }
     return '$base$when'.trim();
   }
@@ -1795,14 +1640,16 @@ class _JournalFindingsState extends State<JournalFindings> {
     return Surface(
       pad: const EdgeInsets.symmetric(horizontal: S.x4),
       child: DriverRow(
-        label: l?.wellnessWeekdayHeadline(
+        label:
+            l?.wellnessWeekdayHeadline(
               weekdayPlural,
               '${delta.abs().round()}',
               direction,
             ) ??
             '${_weekdayName(day)}s: readiness runs '
                 '${delta.abs().round()} $direction than your overall median',
-        detail: l?.wellnessWeekdayDetail('$n') ??
+        detail:
+            l?.wellnessWeekdayDetail('$n') ??
             'From $n of them. A weekday is not a cause — it is a container '
                 'for what you do on it. Nothing here is advice.',
       ),

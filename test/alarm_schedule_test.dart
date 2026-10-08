@@ -19,6 +19,7 @@ void main() {
         expect(schedule[w].hour, defaultAlarmHour);
         expect(schedule[w].minute, defaultAlarmMinute);
         expect(schedule[w].enabled, isFalse);
+        expect(schedule[w].configured, isFalse);
       }
     });
 
@@ -31,6 +32,54 @@ void main() {
           weekday: 2, hour: 6, minute: 45, enabled: true));
       expect(schedule[0].enabled, isFalse);
       expect(schedule[6].enabled, isFalse);
+    });
+
+    test(
+      'saved default-time off alarms remain configured after row reload',
+      () {
+        final saved = AlarmScheduleEntry.fromRow({
+          'weekday': 0,
+          'hour': defaultAlarmHour,
+          'minute': defaultAlarmMinute,
+          'enabled': 0,
+          'configured': 1,
+          'smart_window_minutes': 0,
+        });
+        final schedule = fillDefaultAlarmSchedule([saved]);
+        expect(schedule[0].configured, isTrue);
+        expect(schedule[0].enabled, isFalse);
+        expect(schedule[1].configured, isFalse);
+      },
+    );
+
+    test('legacy stored off alarms default to configured', () {
+      final saved = AlarmScheduleEntry.fromRow({
+        'weekday': 0,
+        'hour': 7,
+        'minute': 0,
+        'enabled': 0,
+      });
+      expect(saved.configured, isTrue);
+    });
+
+    test('a deleted tombstone stays unconfigured after row reload', () {
+      final deleted = AlarmScheduleEntry.fromRow({
+        'weekday': 0,
+        'hour': 7,
+        'minute': 0,
+        'enabled': 0,
+        'configured': 0,
+      });
+      expect(fillDefaultAlarmSchedule([deleted])[0].configured, isFalse);
+    });
+
+    test('claiming an unused default-time slot changes its revision', () {
+      final unused = fillDefaultAlarmSchedule(const [])[0];
+      final claimed = unused.copyWith(configured: true);
+      expect(claimed, isNot(unused));
+      expect({unused, claimed}, hasLength(2));
+      expect(claimed.copyWith(enabled: true).configured, isTrue);
+      expect(claimed.copyWith(configured: false), unused);
     });
   });
 

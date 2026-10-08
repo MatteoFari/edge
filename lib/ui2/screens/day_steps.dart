@@ -298,7 +298,7 @@ class _DayStepsDetailState extends State<DayStepsDetail> {
     // Same rule as Sleep: the stepper names the day, so the nav bar only does
     // when there is no stepper.
     return detailScaffold(c, l?.dayStepsTitle ?? 'Steps',
-        sub: d.days.length < 2 ? dayNavLabel(d.day).toUpperCase() : '', [
+        sub: d.days.length < 2 ? dayNavLabel(d.day, l).toUpperCase() : '', [
       ...dayNavRow(_day ?? d.day, d.days, _goDay),
       if (_loading && _d == null) ...[
         const SizedBox(height: S.x8),
@@ -334,7 +334,7 @@ class _DayStepsDetailState extends State<DayStepsDetail> {
                 'The ${thousands(d.dayTotal)} steps counted $when came from the '
                     'strap\'s own step counter, which reports a running day total '
                     'and no times. There is nothing to place on a clock.')
-          : whyFromNote(d.note, unit: 'days') ??
+          : whyFromNote(d.note, unit: 'days', l: l) ??
                 (l?.dayStepsNothingCounted(when) ??
                     'Nothing that can count steps recorded $when.'),
       icon: chip ? LucideIcons.watch : LucideIcons.footprints,

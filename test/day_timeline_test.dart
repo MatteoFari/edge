@@ -10,6 +10,7 @@ import 'package:openstrap_edge/data/day_label.dart';
 import 'package:openstrap_edge/data/journal_fields.dart';
 import 'package:openstrap_edge/data/nutrition_store.dart';
 import 'package:openstrap_edge/ui2/screens/day_timeline.dart';
+import 'package:openstrap_edge/ui2/screens/metric_detail.dart';
 import 'package:openstrap_edge/ui2/ui2.dart';
 
 final int _day = DateTime(2026, 8, 14).millisecondsSinceEpoch ~/ 1000;
@@ -389,17 +390,18 @@ void _graphTests() {
       expect(find.text('Nothing was recorded on this day'), findsOneWidget);
     });
 
-    testWidgets('a day with a curve draws one axis, labelled once', (t) async {
+    testWidgets('the activity list links its heart-rate curve to the same day', (t) async {
       await t.pumpWidget(frame(full()));
       expect(find.text('Heart rate'), findsOneWidget);
-      expect(find.text('bpm'), findsOneWidget);
-      expect(find.text('Midnight'), findsNWidgets(2));
-      expect(find.text('Noon'), findsOneWidget);
-      // Every lane with something in it is named, and none that is empty.
-      expect(find.text('Asleep'), findsOneWidget);
-      expect(find.text('Workout'), findsOneWidget);
-      expect(find.text('Moving'), findsOneWidget);
-      expect(find.text('Not recorded'), findsOneWidget);
+      expect(find.text('bpm'), findsNothing);
+      expect(find.byType(Scrubber), findsNothing);
+      Widget? destination;
+      Future<T?> open<T>(Widget page) async { destination = page; return null; }
+      final link = t.widget<DetailLink>(find.byType(DetailLink));
+      (link.builder(open) as Pressable).onTap!();
+      final detail = destination! as MetricDetail;
+      expect(detail.metricKey, 'resting_hr');
+      expect(detail.day, _gDay);
     });
 
     testWidgets('nothing overflows at 3.1x', (t) async {

@@ -102,6 +102,8 @@
          Connect silently returns nothing for an undeclared permission rather
          than failing, so an omission here looks exactly like an empty store. -->
     <uses-permission android:name="android.permission.health.READ_WEIGHT" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.health.READ_HEALTH_DATA_HISTORY" />
     <uses-permission android:name="android.permission.health.READ_HEIGHT" />
     <!-- READ only, and there will never be a WRITE counterpart. These come
          from devices CLEARED to take them — a blood-pressure cuff, a CGM, a

@@ -684,8 +684,8 @@ void main() {
     });
   });
 
-  // ── the sparkles button is not an advert for a feature you never set up ──
-  group('the AI button on Home', () {
+  // ── the floating Coach entry replaces the old Home header button ──
+  group('Home no longer duplicates the floating Coach entry', () {
     Widget frame(bool configured) => MaterialApp(
         theme: buildTheme(Brightness.light),
         home: ChangeNotifierProvider<CoachConfig>.value(
@@ -694,18 +694,26 @@ void main() {
               body: HomeScreen(data: HomeData(dayId: '2026-05-20'), hour: 20)),
         ));
 
-    testWidgets('no model, no button', (t) async {
-      await t.pumpWidget(frame(false));
-      expect(find.byIcon(LucideIcons.sparkles), findsNothing);
+    void expectNoCoachHeaderButton() {
+      final settings = find.byIcon(LucideIcons.settings);
       // The profile/settings button beside it is untouched — this is one
       // button, not the row. (It's a gear, not an avatar — the profile photo
       // was retired from this row; see home_screen's "Profile and settings".)
-      expect(find.byIcon(LucideIcons.settings), findsOneWidget);
+      expect(settings, findsOneWidget);
+      final header = find.ancestor(of: settings, matching: find.byType(Row)).first;
+      // The briefing's sparkles belong below the metrics, outside this header.
+      expect(find.descendant(of: header,
+          matching: find.byIcon(LucideIcons.sparkles)), findsNothing);
+    }
+
+    testWidgets('no model, no Coach header button', (t) async {
+      await t.pumpWidget(frame(false));
+      expectNoCoachHeaderButton();
     });
 
-    testWidgets('a configured coach gets its button', (t) async {
+    testWidgets('a configured coach still has no duplicate header button', (t) async {
       await t.pumpWidget(frame(true));
-      expect(find.byIcon(LucideIcons.sparkles), findsOneWidget);
+      expectNoCoachHeaderButton();
     });
   });
 

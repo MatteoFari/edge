@@ -331,6 +331,16 @@ void main() {
     const size = Size(100, 100);
     const axis = AxisSpec(min: 0, max: 100, format: axisInt);
 
+    test('a single recorded score draws a point and its selection cursor', () {
+      final rec = _Rec();
+      LineChart([67.0], Colors.red, fill: false, axis: axis, selectedX: 0)
+          .paint(rec, size);
+      expect(rec.circles.single.dx, 0);
+      expect(rec.circles.single.dy, closeTo(33, .001));
+      expect(rec.paths, isEmpty);
+      expect(rec.lines.single.$1.dx, 0);
+    });
+
     test('a selected slot draws a vertical cursor at its x position', () {
       final rec = _Rec();
       LineChart([0.0, 100.0, 50.0], Colors.red,
@@ -630,6 +640,63 @@ void main() {
       await tester.tapAt(Offset(box.left + box.width * .75, box.center.dy));
       await tester.pump();
       expect(at, closeTo(.75, .02));
+    });
+  });
+
+  group('pan-aware scrubbing', () {
+    testWidgets('tap and hold select; ordinary drag pans without selecting',
+        (tester) async {
+      double? at;
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await tester.pumpWidget(_host(SingleChildScrollView(
+        controller: scroll,
+        scrollDirection: Axis.horizontal,
+        child: SizedBox(width: 1600, child: Scrubber(
+          value: at,
+          onChanged: (v) => at = v,
+          label: 'Heart rate',
+          describe: (v) => '$v',
+          longPressToScrub: true,
+          child: const SizedBox(height: 110),
+        )),
+      )));
+
+      final origin = tester.getTopLeft(find.byType(Scrubber));
+      await tester.dragFrom(origin + const Offset(300, 55),
+          const Offset(-200, 0));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, greaterThan(0));
+      expect(at, isNull);
+
+      await tester.tapAt(origin + const Offset(200, 55));
+      await tester.pump();
+      expect(at, isNotNull);
+      at = null;
+      final gesture = await tester.startGesture(origin + const Offset(100, 55));
+      await tester.pump(const Duration(seconds: 1));
+      final first = at;
+      expect(first, isNotNull);
+      await gesture.moveBy(const Offset(80, 0));
+      await tester.pump();
+      expect(at, greaterThan(first!));
+      await gesture.up();
+    });
+
+    testWidgets('vertical scrolling does not place a reading', (tester) async {
+      double? at;
+      final scroll = ScrollController();
+      addTearDown(scroll.dispose);
+      await tester.pumpWidget(_host(ListView(controller: scroll, children: [
+        Scrubber(value: at, onChanged: (v) => at = v,
+          label: 'Heart rate', describe: (v) => '$v', longPressToScrub: true,
+          child: const SizedBox(height: 200)),
+        const SizedBox(height: 1500),
+      ])));
+      await tester.drag(find.byType(Scrubber), const Offset(0, -100));
+      await tester.pumpAndSettle();
+      expect(scroll.offset, greaterThan(0));
+      expect(at, isNull);
     });
   });
 

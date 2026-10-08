@@ -184,8 +184,11 @@ String? readinessInputShortfallNote(
   final shortfalls = [
     for (final key in const ['hrv', 'rhr', 'resp'])
       if (diag[key] case {'value': true} && final e)
-        math.max(0, readinessCompositeMinBaseline -
-            ((e['baseline_n'] as num?)?.toInt() ?? 0)),
+        math.max(
+          0,
+          readinessCompositeMinBaseline -
+              ((e['baseline_n'] as num?)?.toInt() ?? 0),
+        ),
   ]..sort();
   final shortfall = shortfalls.length < readinessCompositeMinInputs
       ? 0
@@ -248,6 +251,9 @@ String? readinessUnstableBaselineNote(
 /// done in exactly one place. `sleepJson` is the SleepSegmentation.toJson() (the
 /// single source of TST/WASO/stages/hypnogram).
 class DayBundleInput {
+  /// Opt-in personal-fork experiment. Stored separately from the standard
+  /// respiratory input used by readiness, baselines, alerts and health export.
+  final bool experimentalRespiration;
   final String date; // wake-to-wake label (coordinator-supplied)
 
   // ── DAY span (wake → next wake) 1 Hz substrate ────────────────────────────
@@ -329,6 +335,9 @@ class DayBundleInput {
   final String sleepSource;
 
   const DayBundleInput({
+    this.experimentalRespiration = const bool.fromEnvironment(
+      'EXPERIMENTAL_RESPIRATION',
+    ),
     required this.date,
     required this.dayTsSec,
     required this.dayHr,
@@ -359,6 +368,7 @@ class DayBundleInput {
   });
 
   Map<String, dynamic> toJson() => {
+    'experimental_respiration': experimentalRespiration,
     'date': date,
     'step_spans': stepSpans,
     'day_ts': dayTsSec,
@@ -405,9 +415,11 @@ class DayBundleInput {
       }
       return out;
     }
+
     List<String> strs(String k) =>
         ((m[k] as List?) ?? const []).map((e) => e.toString()).toList();
     return DayBundleInput(
+      experimentalRespiration: m['experimental_respiration'] == true,
       date: m['date'] as String,
       dayTsSec: ints('day_ts'),
       dayHr: ints('day_hr'),
@@ -508,7 +520,8 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   // worse night. `absence_reason` is why a window produced nothing.
   final unobservedSec = (d.sleepJson['unobserved_sec'] as num?)?.toInt();
   final absenceReason = d.sleepJson['absence_reason'] as String?;
-  final bandOffsetTrimSec = (d.sleepJson['band_offset_trim_sec'] as num?)?.toInt();
+  final bandOffsetTrimSec = (d.sleepJson['band_offset_trim_sec'] as num?)
+      ?.toInt();
   final runs = _sleepRuns(d);
 
   // ── CLINICAL (sleep-windowed) ──────────────────────────────────────────────
@@ -565,7 +578,8 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
       : const Metric<NocturnalRhr>.absent(
           tier: Tier.high,
           inputs_used: ['hr_1hz', 'sleep_window'],
-          note: 'no sleep was scored for this day — resting HR is only ever '
+          note:
+              'no sleep was scored for this day — resting HR is only ever '
               'measured over a sleep window, never over waking hours',
         );
   // HR dip: day-side = waking HR outside the sleep window; night-side = sleep HR.
@@ -588,6 +602,22 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
           inputs_used: const ['rr_cleaned'],
           note: needInputNote('nn_beats', have: nn.length, need: 30),
         );
+  // The frozen experiment uses the reported record anchors for the retained
+  // corrected intervals, never correctRr's cumulative time axis. Hold timestamp
+  // regressions exactly as the original replay did; dropped beats stay dropped.
+  ExperimentalRespResult? experimentalResp;
+  if (d.experimentalRespiration && hasSleep) {
+    final held = <double>[];
+    for (final t in d.sleepRrTsMs) {
+      held.add(held.isEmpty ? t : math.max(held.last, t));
+    }
+    experimentalResp = experimentalRsaRespRate(
+      nn,
+      [for (final i in corrected.nnSourceIndices) held[i]],
+      sleepStartMs: d.sleepOnsetSec * 1000.0,
+      sleepEndMs: d.sleepOffsetSec * 1000.0,
+    );
+  }
   final cvhr = nn.length >= 60
       ? cvhrApneaScreen(nn, nnTimes, artifactFraction: artifactFraction)
       : Metric<CvhrResult>.absent(
@@ -599,8 +629,10 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   // Runs over the WHOLE-DAY cleaned RR (not just sleep) so an arrhythmia screen
   // isn't limited to the sleep window. Hard-gated on beat count + artifact inside
   // irregularBeatScreen; returns absent on a thin/noisy day.
-  final dayCorrected = correctRr(d.dayRrMs,
-      rrTsMs: d.dayRrTsMs.isEmpty ? null : d.dayRrTsMs);
+  final dayCorrected = correctRr(
+    d.dayRrMs,
+    rrTsMs: d.dayRrTsMs.isEmpty ? null : d.dayRrTsMs,
+  );
   final irregular24h = irregularBeatScreen(
     dayCorrected.nn,
     // Require sustained irregularity in independent short windows, not just
@@ -633,7 +665,8 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   // ratio built from them measures that drift, not oxygenation. Imported WHOOP
   // blood oxygen is a separate `spo2` metric_series key and does not pass
   // through here.
-  const kSpo2Refusal = 'refused: the red and IR channels are one signal — '
+  const kSpo2Refusal =
+      'refused: the red and IR channels are one signal — '
       'ir − red is a fixed offset within a session, so any ratio built from '
       'them measures baseline drift, not oxygenation';
   const odi = Metric<RelativeOdiResult>.absent(
@@ -753,18 +786,9 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   Map<String, dynamic>? readinessAbsentDiag;
   if (!composite.present) {
     readinessAbsentDiag = {
-      'hrv': {
-        'value': lnToday != null,
-        'baseline_n': d.lnRmssdHistory.length,
-      },
-      'rhr': {
-        'value': rhrToday != null,
-        'baseline_n': d.rhrHistory.length,
-      },
-      'resp': {
-        'value': respToday != null,
-        'baseline_n': d.respHistory.length,
-      },
+      'hrv': {'value': lnToday != null, 'baseline_n': d.lnRmssdHistory.length},
+      'rhr': {'value': rhrToday != null, 'baseline_n': d.rhrHistory.length},
+      'resp': {'value': respToday != null, 'baseline_n': d.respHistory.length},
       'temp': {
         'value': skinTempAdc != null,
         'baseline_n': d.skinTempAdcHistory.length,
@@ -939,10 +963,9 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
         // of the number growing when the coordinator's pass lands.
         cadenceSpmPerMin: d.stepSpans.isEmpty
             ? null
-            : cadenceSpmForMinutes(
-                [for (final p in wakeHr) p.tsSec ~/ 60],
-                d.stepSpans,
-              ),
+            : cadenceSpmForMinutes([
+                for (final p in wakeHr) p.tsSec ~/ 60,
+              ], d.stepSpans),
         // `?.` — `dailyEnergy` abstains outright when the anchors cannot
         // define a gate, rather than billing every waking minute as active.
         // Absent stays absent here, same as every other input on this seam.
@@ -1160,6 +1183,23 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
 
   final respiration = <String, dynamic>{
     'rsa': resp.toJson((v) => v.toJson()),
+    if (d.experimentalRespiration)
+      'experimental': {
+        'value': experimentalResp?.toJson() ?? '—',
+        // A fixed estimate-grade display floor, not an accuracy probability.
+        'confidence': experimentalResp?.brpm == null ? 0.0 : 0.25,
+        'tier': Tier.estimate,
+        'inputs_used': [
+          'rr_cleaned',
+          'reported_record_anchors',
+          'sleep_window',
+        ],
+        'note': experimentalResp?.brpm != null
+            ? 'Experimental respiratory rate; confidence is uncalibrated. '
+                  'Not used for recovery scoring or health export.'
+            : 'Experimental respiratory rate withheld: '
+                  '${experimentalResp?.status ?? 'no_scored_sleep'}.',
+      },
     'cvhr_apnea': cvhr.toJson((v) => v.toJson()),
     'odi': odi.toJson((v) => v.toJson()),
   };
@@ -1272,9 +1312,7 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
     'tier': Tier.relative,
     'inputs_used': const ['spo2_red_raw', 'spo2_ir_raw'],
     'note': kSpo2Refusal,
-    'debug': <String, dynamic>{
-      'sleep_samples': d.sleepTsSec.length,
-    },
+    'debug': <String, dynamic>{'sleep_samples': d.sleepTsSec.length},
   };
 
   // ── NOCTURNAL detail: sleeping-HR nadir + waking HR. Both computable today
@@ -1311,9 +1349,11 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   final hrStats = dayHrValid.isEmpty
       ? null
       : {
-          'max': smoothedMaxHr(dayHrInt, age: age?.round()) ??
+          'max':
+              smoothedMaxHr(dayHrInt, age: age?.round()) ??
               dayHrValid.reduce(math.max).round(),
-          'min': smoothedMinHr(dayHrInt, age: age?.round()) ??
+          'min':
+              smoothedMinHr(dayHrInt, age: age?.round()) ??
               dayHrValid.reduce(math.min).round(),
           'avg': _mean(dayHrValid)!.round(),
         };
@@ -1416,11 +1456,7 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
   }
 
   final baselines = <String, dynamic>{
-    'resting_hr': baselineBlock(
-      d.rhrHistory,
-      rhrToday,
-      Baselines.restingHRCfg,
-    ),
+    'resting_hr': baselineBlock(d.rhrHistory, rhrToday, Baselines.restingHRCfg),
     'hrv': baselineBlock(d.rmssdHistory, rmssdScalar, Baselines.hrvCfg),
     'resp': baselineBlock(d.respHistory, respToday, Baselines.respCfg),
     'skin_temp': baselineBlock(
@@ -1526,6 +1562,8 @@ Map<String, dynamic> deriveDayBundle(Map<String, dynamic> inputJson) {
       'max_hr_used': hrMax,
       'ln_rmssd': lnToday,
       'resp_rate': respToday,
+      if (d.experimentalRespiration)
+        'resp_rate_experimental': experimentalResp?.brpm,
       'skin_temp_z': skinTempZ,
       // RAW nightly skin-temp ADC mean — the personal BASELINE series for
       // skin_temp_z. ALWAYS present when there's sleep+temp data (even while z is

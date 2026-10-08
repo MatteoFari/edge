@@ -61,6 +61,7 @@ import '../screens/screens.dart';
 import '../ui2.dart';
 import 'devices.dart';
 import 'profile.dart';
+import 'settings.dart' show ExpressivePalettePicker;
 
 /// A deterministic series — a gallery cannot depend on random data, and
 /// neither can a golden.
@@ -155,6 +156,8 @@ Map<String, Widget> galleryCases() => {...goldenCases(), ...extraCases()};
 /// because a PNG per case per theme per scale is a file somebody has to
 /// review — see the note at the bottom of the golden test.
 Map<String, Widget> goldenCases() => {
+      'expressive_palette_picker': ExpressivePalettePicker(
+          chosen: ExpressivePalette.freshMint, onPick: (_) {}),
       // The one number the whole app is judged by, and the picture the app
       // leaves someone else's phone. Both are photographed rather than merely
       // swept: they are the two components a regression would be noticed in
@@ -324,6 +327,8 @@ Map<String, Widget> goldenCases() => {
         onSelect: (_) {},
       ),
       'nav_bar': const NavBar('Last night', sub: 'MON 14 AUG'),
+      'home_expressive_header': ExpressiveHomeHeader(
+          day: _navDays[2], days: _navDays, onDay: (_) {}),
       // The stepper every single-day screen wears. Shot mid-history, where
       // both arrows are live and the middle opens the calendar — the state a
       // user spends all their time in once there is more than a week on disk.
@@ -565,6 +570,9 @@ Map<String, Widget> _nutritionAndWellnessCases() {
         controller: TextEditingController(text: 'Slept badly, big lunch.'),
         label: 'Anything else',
         lines: 3),
+    'domain_search': DomainSearchField(
+        controller: TextEditingController(), label: 'Search measures',
+        hint: 'Search measures or topics', onChanged: (_) {}),
     'breath_circle': const BreathCircle(t: .7, label: 'Inhale'),
     'driver_row': const Surface(
         pad: EdgeInsets.symmetric(horizontal: S.x4),
@@ -698,6 +706,7 @@ final _psd = List<double>.generate(64, (i) => (i < 20 ? 40 - i : 26 - i * .3)
     .toDouble());
 
 Map<String, Widget> extraCases() => {
+      'expressive_loading_indicator': const ExpressiveLoadingIndicator(phase: .35),
       // The edge treatment that tells a horizontal row it continues. Swept
       // rather than photographed because the state worth seeing is the one a
       // still cannot hold: it is ABSENT when the content fits, present when it
@@ -859,6 +868,11 @@ Map<String, Widget> extraCases() => {
               style: F.body.copyWith(color: P.of(c).on(C.green))),
         ),
       ),
+      'panel_handle': Builder(builder: (c) => PanelHandle(
+        onExpand: () {}, onCollapse: () {},
+        child: Pressable(semanticLabel: 'Expand chat', onTap: () {},
+          child: Text('Coach', style: F.body.copyWith(color: P.of(c).ink))),
+      )),
       'screen_title': const ScreenTitle('Sleep and recovery',
           trailing: Pill('Estimated', C.yellow)),
       // Static on purpose: the gallery shows the control, and its position is
@@ -1424,6 +1438,8 @@ final _sessions = <String, ActivityResult>{
 /// assembled from; the screens themselves are `Scaffold`s and belong on a
 /// device, not in a scroll.
 Map<String, Widget> _liveCases() => {
+      'live_session_card': LiveSessionCard(activityByName('Indoor bike')!,
+          elapsed: 3925, paused: true, onNavigate: (_) async {}),
       'live_heart': const LiveHeart(LiveFeed(
           hr: 148,
           zone: 4,

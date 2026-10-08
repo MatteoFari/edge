@@ -262,7 +262,7 @@ class _NapsScreenState extends State<NapsScreen> {
           // below is only for a day that recorded no reason at all.
           StatusCard(
             l?.napsNoReadingTitle ?? 'No nap reading for this day',
-            whyFromNote(d.note, unit: 'days') ??
+            whyFromNote(d.note, unit: 'days', l: l) ??
                 l?.napsNoReadingBody ??
                     'Naps are worked out from the same 1 Hz recording the rest of '
                         'the day is, and this day does not have enough of it.',

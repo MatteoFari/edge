@@ -241,13 +241,13 @@ String? driverValueLine(BuildContext c, DriverFacts f) {
   }
   final v = f.value, u = f.usual, d = f.delta;
   if (v == null) return null;
-  final now = '${metricValue(f.spec.unit, v)}$suffix';
+  final now = '${metricValue(f.spec.unit, v, l)}$suffix';
   if (u == null || d == null) return now;
   if (metricValue(f.spec.unit, d.abs()) == metricValue(f.spec.unit, 0)) {
     return l?.driverBreakdownRightOnUsual(now) ?? '$now · right on your usual';
   }
   final deltaStr = '${metricValue(f.spec.unit, d.abs())}$suffix';
-  final usualStr = '${metricValue(f.spec.unit, u)}$suffix';
+  final usualStr = '${metricValue(f.spec.unit, u, l)}$suffix';
   return d > 0
       ? (l?.driverBreakdownAboveUsual(now, deltaStr, usualStr) ??
           '$now · $deltaStr above your usual $usualStr')
@@ -388,7 +388,7 @@ class _DriverTile extends StatelessWidget {
     // The pipeline's own reason, never a written-here one. `need_baseline:
     // have=2,need=7` becomes "Need 5 more nights"; anything it cannot read
     // comes back null and the row simply says "not available" above.
-    final why = f.used ? null : whyFromNote(f.note);
+    final why = f.used ? null : whyFromNote(f.note, l: l);
 
     final head = Padding(
       padding: const EdgeInsets.symmetric(vertical: S.x3),
@@ -483,11 +483,11 @@ Widget _chart(BuildContext c, P p, DriverFacts f) {
     footnote: band == null
         ? null
         : (l?.driverBreakdownUsualRange(
-                metricValue(f.spec.unit, band.$1),
-                metricValue(f.spec.unit, band.$2),
+                metricValue(f.spec.unit, band.$1, l),
+                metricValue(f.spec.unit, band.$2, l),
                 unit.isEmpty ? '' : ' $unit') ??
-            'Your usual range ${metricValue(f.spec.unit, band.$1)}–'
-                '${metricValue(f.spec.unit, band.$2)}'
+            'Your usual range ${metricValue(f.spec.unit, band.$1, l)}–'
+                '${metricValue(f.spec.unit, band.$2, l)}'
                 '${unit.isEmpty ? '' : ' $unit'}'),
     empty: axis == null ? const NoData() : null,
     child: axis == null
@@ -578,7 +578,7 @@ StatusCard driverAbsenceCard(
   }
   return StatusCard(
     l?.driverBreakdownAbsenceTitle ?? 'No breakdown to show',
-    whyFromNote(note) ??
+    whyFromNote(note, l: l) ??
         (l?.driverBreakdownAbsenceNoReason ??
             'Nothing recorded says why last night has no breakdown.'),
     icon: LucideIcons.listTree,

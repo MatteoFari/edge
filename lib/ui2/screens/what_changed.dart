@@ -31,7 +31,7 @@ import '../../data/local_repository.dart';
 import '../../l10n/app_localizations.dart';
 import '../ui2.dart';
 import 'day_timeline.dart' show DayTimelineScreen;
-import 'home_screen.dart' show go, repoOf;
+import 'home_screen.dart' show repoOf;
 import 'metric_detail.dart'
     show dayNavRow, detailLinkRow, detailScaffold, pickDay;
 import 'month_grid.dart';
@@ -168,7 +168,7 @@ class _WhatChangedScreenState extends State<WhatChangedScreen> {
 List<Widget> whatChangedBody(BuildContext c, WhatChangedData d) {
   final p = P.of(c);
   final l = AppLocalizations.of(c);
-  final pairing = sweepPairing(d.findings);
+  final pairing = d.findings.length >= 2 && l?.localeName == 'it' ? l!.sweepPairingSentence(sweepReading(d.findings[0].text.split(' — ').first, l), sweepReading(d.findings[1].text.split(' — ').first, l)) : sweepPairing(d.findings);
   return [
     if (!d.hadToday)
       StatusCard(
@@ -232,7 +232,7 @@ List<Widget> whatChangedBody(BuildContext c, WhatChangedData d) {
         LucideIcons.listOrdered,
         l?.whatChangedDayLinkTitle ?? 'What happened that day',
         l?.whatChangedDayLinkSub ?? 'Sleep, sessions, meals and logs in time order',
-        () => go(c, DayTimelineScreen(day: d.day)),
+        null, destination: DayTimelineScreen(day: d.day),
       ),
     ],
     if (d.grid.isNotEmpty)
@@ -268,7 +268,7 @@ class SweepFindingRow extends StatelessWidget {
           ),
           const SizedBox(width: S.x3),
           Expanded(
-            child: Text(f.text,
+            child: Text(sweepFindingText(f.text, AppLocalizations.of(c)),
                 style: F.body.copyWith(color: p.ink, height: 1.45)),
           ),
         ],

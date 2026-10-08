@@ -28,20 +28,23 @@ import '../../l10n/app_localizations.dart';
 import '../../models/metric.dart';
 import '../../state/app_state.dart';
 import '../../state/clock_format.dart' show formatClockOf;
+import '../../state/prefs.dart';
 import '../../state/units_controller.dart';
 import '../activity/catalogue.dart';
 import '../activity/day_strain.dart';
 import '../activity/live.dart';
 import '../activity/picker.dart';
+import '../app_shell.dart' show shellScrollPadding;
 import '../activity/poster.dart' show PosterStatRow;
 import '../activity/setup.dart';
 import '../activity/summary.dart';
 import '../charts.dart';
-import '../profile/profile.dart' show openProfile;
+import '../profile/profile.dart' show ProfileHome;
 import '../grammar.dart';
+import '../ui2.dart' show DetailLink, DetailOpener, SubPages;
 import '../revision.dart';
 import '../theme.dart';
-import '../../data/day_label.dart' show calendarDaysBetween;
+import '../../data/day_label.dart' show calendarDaysBetween, dayLabelOf;
 import 'log_workout.dart';
 import 'start_card.dart';
 
@@ -55,12 +58,18 @@ class WorkoutScreen extends StatefulWidget {
 class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
   int tab = 0;
   List<String> _tabs(AppLocalizations? loc) => [
-        loc?.workoutTabForYou ?? 'For you',
-        loc?.workoutTabActivities ?? 'Activities',
-        loc?.workoutTabHistory ?? 'History',
-      ];
+    loc?.workoutTabForYou ?? 'For you',
+    loc?.workoutTabActivities ?? 'Activities',
+    loc?.workoutTabHistory ?? 'History',
+  ];
 
   Future<_WorkoutData>? _load;
+  Future<_WorkoutHistory>? _historyLoad;
+  final _activitySearch = TextEditingController();
+  late String _historyRange;
+  late ({DateTime? from, DateTime until}) _historyWindow;
+  String? _historyActivity;
+  int _historySource = 0;
 
   @override
   void didChangeDependencies() {
@@ -77,8 +86,32 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
   // Block bodies, not `=>`: the arrow form returns the assigned Future, which
   // setState asserts against (debug builds throw and skip the rebuild).
   void reload() => setState(() {
-        _load = _loadWorkoutData(context.read<AppState>());
-      });
+    _load = _loadWorkoutData(context.read<AppState>());
+    if (_historyLoad != null) _readHistory();
+  });
+
+  void _readHistory() {
+    _historyWindow = workoutHistoryWindow(_historyRange, DateTime.now());
+    _historyLoad = _loadWorkoutHistory(
+      context.read<AppState>(),
+      _historyWindow,
+    );
+  }
+
+  void _selectHistoryRange(String range) {
+    if (_historyRange == range) return;
+    setState(() {
+      _historyRange = range;
+      _readHistory();
+    });
+    Prefs.setString(Prefs.workoutsRange, range);
+  }
+
+  @override
+  void dispose() {
+    _activitySearch.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext c) {
@@ -87,43 +120,64 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
       builder: (c, snap) {
         final loc = AppLocalizations.of(c);
         final d = snap.data ?? const _WorkoutData.empty();
-        // THE LIST DROPS ITS SIDE PADDING and hands it to each child instead,
-        // so the hero card can be the one child that does not get it and runs
-        // edge to edge. Two earlier attempts had the CARD escape its parent —
-        // a negative margin (which Flutter asserts against) and an OverflowBox
-        // (which takes an unbounded height inside a scroll view and blanked
-        // this whole tab on device). Padding the siblings is ordinary layout
-        // and cannot do either.
-        return ListView(
-          padding: const EdgeInsets.fromLTRB(0, S.x2, 0, S.x16),
+        final inset = shellScrollPadding(
+          c,
+          const EdgeInsets.fromLTRB(0, S.x2, 0, S.x16),
+        );
+        return Column(
           children: [
-            for (final w in <Widget>[
-              ScreenTitle(loc?.workoutScreenTitle ?? 'Workout'),
-              SubTabs(_tabs(loc), tab, (i) => setState(() => tab = i),
-                  color: C.domMove),
-              const SizedBox(height: S.x5),
-              ...switch (tab) {
-                0 => _forYou(c, d),
-                1 => _activities(c, d),
-                _ => _history(c, d),
-              },
-            ])
-              if (w is StartCard)
-                w
-              else
-                Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: S.x4),
-                    child: w),
+            Padding(
+              padding: EdgeInsets.fromLTRB(S.x4, inset.top, S.x4, 0),
+              child: Column(
+                children: [
+                  ScreenTitle(loc?.workoutScreenTitle ?? 'Workout'),
+                  SubTabs(
+                    _tabs(loc),
+                    tab,
+                    (i) => setState(() => tab = i),
+                    color: C.domMove,
+                  ),
+                  const SizedBox(height: S.x5),
+                ],
+              ),
+            ),
+            Expanded(
+              child: SubPages(
+                index: tab,
+                count: _tabs(loc).length,
+                onChanged: (i) => setState(() => tab = i),
+                builder: (c, i) => i == 2
+                    ? _historyPage(c, d, inset.bottom)
+                    : ListView(
+                        key: PageStorageKey('workout-tab-$i'),
+                        padding: EdgeInsets.fromLTRB(
+                          S.x4,
+                          0,
+                          S.x4,
+                          inset.bottom,
+                        ),
+                        children: [
+                          for (final w in switch (i) {
+                            0 => _forYou(c, d),
+                            1 => _activities(c, d),
+                            _ => const <Widget>[],
+                          })
+                            w,
+                        ],
+                      ),
+              ),
+            ),
           ],
         );
       },
     );
   }
 
-  void _openPicker(BuildContext c, _WorkoutData d) =>
-      Navigator.of(c).push(MaterialPageRoute(
-          builder: (_) => ActivityPicker(
-              weightKg: d.weightKg, host: _host(d), recent: d.recent)));
+  Future<void> _openPicker(DetailOpener open, _WorkoutData d) async {
+    await open<void>(
+      ActivityPicker(weightKg: d.weightKg, host: _host(d), recent: d.recent),
+    );
+  }
 
   ActivityHost _host(_WorkoutData d) =>
       activityHost(context.read<AppState>(), history: d.setHistory);
@@ -137,25 +191,13 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
         label: loc?.workoutStartSessionLabel ?? 'START A SESSION',
         count: allActivities.length,
         noun: loc?.workoutActivitiesNoun ?? 'activities',
-        asset: 'mascot_workout.png',
-        accent: C.purple,
-        deep: C.indigo,
-        onTap: () => _openPicker(c, d),
+        icon: LucideIcons.dumbbell,
+        actionLabel: loc?.activityPickerTitle ?? 'Choose activity',
+        accent: C.domMove,
+        onNavigate: (open) => _openPicker(open, d),
       ),
       const SizedBox(height: S.x3),
-      Row(children: [
-        for (var i = 0; i < 3; i++) ...[
-          if (i > 0) const SizedBox(width: S.x3),
-          Expanded(
-            child: _QuickTile(
-              quickStart[i],
-              () => Navigator.of(c).push(MaterialPageRoute(
-                  builder: (_) => ActivitySetup(quickStart[i],
-                      weightKg: d.weightKg, host: _host(d)))),
-            ),
-          ),
-        ],
-      ]),
+      _quickTiles(c, d, quickStart.take(3).toList()),
       Section(
         loc?.workoutThisWeek ?? 'This week',
         Surface(
@@ -173,25 +215,29 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
               final today = DateTime.now().weekday - 1;
               final done = d.weekDays.contains(i);
               return Expanded(
-                child: Column(children: [
-                  Text(days[i], style: F.over.copyWith(color: p.ink3)),
-                  const SizedBox(height: S.x2),
-                  Container(
-                    width: 30,
-                    height: 30,
-                    decoration: BoxDecoration(
+                child: Column(
+                  children: [
+                    Text(days[i], style: F.over.copyWith(color: p.ink3)),
+                    const SizedBox(height: S.x2),
+                    Container(
+                      width: 30,
+                      height: 30,
+                      decoration: BoxDecoration(
                         shape: BoxShape.circle,
                         color: done
                             ? p.wash(C.green, strength: 1.5)
-                            : (i == today ? p.fill(C.purple) : p.card2)),
-                    child: Icon(
+                            : (i == today ? p.fill(C.purple) : p.card2),
+                      ),
+                      child: Icon(
                         done
                             ? LucideIcons.check
                             : (i == today ? LucideIcons.play : null),
                         size: 14,
-                        color: done ? p.on(C.green) : p.inkOnFill),
-                  ),
-                ]),
+                        color: done ? p.on(C.green) : p.inkOnFill,
+                      ),
+                    ),
+                  ],
+                ),
               );
             }),
           ),
@@ -199,33 +245,36 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
       ),
       Section(
         loc?.workoutTrainingLoad ?? 'Training load',
-        Column(children: [
-          _loadCard(c, p, d),
-          // TS-12 — two facts and no verb, directly under the card that holds
-          // one of them. Rendered only on the coincidence; there is no "all
-          // clear" variant, because the quiet state is the absence of a card
-          // and not a reassurance we can make.
-          if (d.overreach != null) ...[
-            const SizedBox(height: S.x3),
-            _overreachCard(c, d.overreach!),
+        Column(
+          children: [
+            _loadCard(c, p, d),
+            // TS-12 — two facts and no verb, directly under the card that holds
+            // one of them. Rendered only on the coincidence; there is no "all
+            // clear" variant, because the quiet state is the absence of a card
+            // and not a reassurance we can make.
+            if (d.overreach != null) ...[
+              const SizedBox(height: S.x3),
+              _overreachCard(c, d.overreach!),
+            ],
+            // TS-08 — a SECOND axis, beside the cardiovascular one and never
+            // inside it. Its own card because that is what "not fused" means:
+            // one bar is heartbeats over time, the other is kilos off the floor,
+            // and they do not add up to anything. Drawn only when the week has
+            // any, so a runner never sees an empty kilo chart.
+            if (d.tonnage7.any((v) => v != null)) ...[
+              const SizedBox(height: S.x3),
+              _tonnageCard(c, p, d),
+            ],
           ],
-          // TS-08 — a SECOND axis, beside the cardiovascular one and never
-          // inside it. Its own card because that is what "not fused" means:
-          // one bar is heartbeats over time, the other is kilos off the floor,
-          // and they do not add up to anything. Drawn only when the week has
-          // any, so a runner never sees an empty kilo chart.
-          if (d.tonnage7.any((v) => v != null)) ...[
-            const SizedBox(height: S.x3),
-            _tonnageCard(c, p, d),
-          ],
-        ]),
+        ),
         // TS-02 — the door onto the day's own strain trace. `getDayStrain` and
         // `series.strain_curve` were both fully implemented and read by no
         // screen. A link, not a card: this tab is about the fortnight, and the
         // shape of one day belongs behind a tap.
         action: loc?.workoutTodaysStrainAction ?? "Today's strain",
-        onAction: () => Navigator.of(c)
-            .push(MaterialPageRoute(builder: (_) => const DayStrainDetail())),
+        onAction: () => Navigator.of(
+          c,
+        ).push(MaterialPageRoute(builder: (_) => const DayStrainDetail())),
       ),
     ];
   }
@@ -250,12 +299,13 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
           for (var i = 6; i >= 0; i--)
             _weekdayLetter(c, DateTime(end.year, end.month, end.day - i)),
         ],
-        footnote: (loc?.workoutTonnageFootnoteIntro ??
+        footnote:
+            (loc?.workoutTonnageFootnoteIntro ??
                 'Reps × load over the sets you logged with a weight. ') +
             (d.tonnagePartial
                 ? (loc?.workoutTonnageFootnotePartial ??
-                    'Sets logged without one are not in it, so '
-                        'this is a floor rather than a total. ')
+                      'Sets logged without one are not in it, so '
+                          'this is a floor rather than a total. ')
                 : '') +
             (loc?.workoutTonnageFootnoteOutro ??
                 'Exact for what you typed and worthless across exercises — '
@@ -263,8 +313,12 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
         series: d.tonnage7,
         child: CustomPaint(
           size: Size.infinite,
-          painter: Bars(d.tonnage7, p.on(C.orange),
-              axis: axis, t: animate(context, 1)),
+          painter: Bars(
+            d.tonnage7,
+            p.on(C.orange),
+            axis: axis,
+            t: animate(context, 1),
+          ),
         ),
       ),
     );
@@ -287,7 +341,10 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     final ratio = o.ratio.toStringAsFixed(1);
     return InsightCard(
       loc?.workoutOverreachHeadline(
-              ratio, o.nightsElevated, o.nightsConsidered) ??
+            ratio,
+            o.nightsElevated,
+            o.nightsConsidered,
+          ) ??
           'Your last 7 days of load are '
               '$ratio× your usual six weeks, and your resting '
               'heart rate was above your usual on ${o.nightsElevated} of '
@@ -306,7 +363,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     if (d.load == null) {
       return StatusCard(
         loc?.workoutNoLoadTitle ?? 'No training load yet',
-        d.loadNote ??
+        whyFromNote(d.loadNote, unit: 'days', l: loc) ??
             (loc?.workoutNoLoadBody ??
                 'Fitness and fatigue are 42-day and 7-day averages. They need '
                     'about two weeks of sessions.'),
@@ -316,74 +373,98 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     final ld = d.load!;
     final notYet = loc?.workoutNotYet ?? 'Not yet';
     return Surface(
-      child: Column(children: [
-        Row(
-            crossAxisAlignment: CrossAxisAlignment.baseline,
-            textBaseline: TextBaseline.alphabetic,
-            children: [
-              Text(ld.ctl.round().toString(),
-                  style: F.n34.copyWith(color: p.ink)),
-              const SizedBox(width: S.x2),
-              Text(loc?.workoutFitnessLabel ?? 'fitness',
-                  style: F.cap.copyWith(color: p.ink3)),
-              const Spacer(),
-              if (ld.tsb != null)
-                Pill(_form(c, ld.tsb!), ld.tsb! >= 0 ? C.green : C.orange),
-            ]),
-        if (d.trimp7.any((v) => v != null)) ...[
-          const SizedBox(height: S.x4),
-          Builder(builder: (_) {
-            final end = d.trimpEnd ?? DateTime.now();
-            final axis = AxisSpec.of([for (final v in d.trimp7) ?v], floor: 0);
-            final days = d.trimp7.where((v) => v != null).length;
-            return ChartFrame(
-              title: loc?.workoutDailyLoadTitle ?? 'DAILY LOAD',
-              unit: loc?.workoutTrimpUnit ?? 'TRIMP',
-              height: 88,
-              yAxis: axis,
-              // Seven slots, seven real dates. A day with nothing keeps its
-              // place and its letter, and draws as the gap it is.
-              xLabels: [
-                for (var i = 6; i >= 0; i--)
-                  _weekdayLetter(c, DateTime(end.year, end.month, end.day - i)),
+      child: Column(
+        children: [
+          Align(
+            alignment: Alignment.centerLeft,
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: S.x2,
+              runSpacing: S.x2,
+              children: [
+                Text(
+                  ld.ctl.round().toString(),
+                  style: F.n34.copyWith(color: p.ink),
+                ),
+                Text(
+                  loc?.workoutFitnessLabel ?? 'fitness',
+                  style: F.cap.copyWith(color: p.ink3),
+                ),
+                if (ld.tsb != null)
+                  Pill(_form(c, ld.tsb!), ld.tsb! >= 0 ? C.green : C.orange),
               ],
-              footnote: (loc?.workoutDailyLoadFootnoteIntro ??
-                      'Banister training impulse — minutes weighted by '
-                          'heart-rate reserve. ') +
-                  (days == 7
-                      ? (loc?.workoutDailyLoadAllDays ?? 'Last seven days.')
-                      : (loc?.workoutDailyLoadPartialDays(days) ??
-                          '$days of the last '
-                              'seven days produced a figure.')),
-              series: d.trimp7,
-              child: CustomPaint(
-                  size: Size.infinite,
-                  // Today is the last slot, always — not "the newest value".
-                  painter: Bars(d.trimp7, p.on(C.purple),
+            ),
+          ),
+          if (d.trimp7.any((v) => v != null)) ...[
+            const SizedBox(height: S.x4),
+            Builder(
+              builder: (_) {
+                final end = d.trimpEnd ?? DateTime.now();
+                final axis = AxisSpec.of([
+                  for (final v in d.trimp7) ?v,
+                ], floor: 0);
+                final days = d.trimp7.where((v) => v != null).length;
+                return ChartFrame(
+                  title: loc?.workoutDailyLoadTitle ?? 'DAILY LOAD',
+                  unit: loc?.workoutTrimpUnit ?? 'TRIMP',
+                  height: 88,
+                  yAxis: axis,
+                  // Seven slots, seven real dates. A day with nothing keeps its
+                  // place and its letter, and draws as the gap it is.
+                  xLabels: [
+                    for (var i = 6; i >= 0; i--)
+                      _weekdayLetter(
+                        c,
+                        DateTime(end.year, end.month, end.day - i),
+                      ),
+                  ],
+                  footnote:
+                      (loc?.workoutDailyLoadFootnoteIntro ??
+                          'Banister training impulse — minutes weighted by '
+                              'heart-rate reserve. ') +
+                      (days == 7
+                          ? (loc?.workoutDailyLoadAllDays ?? 'Last seven days.')
+                          : (loc?.workoutDailyLoadPartialDays(days) ??
+                                '$days of the last '
+                                    'seven days produced a figure.')),
+                  series: d.trimp7,
+                  child: CustomPaint(
+                    size: Size.infinite,
+                    // Today is the last slot, always — not "the newest value".
+                    painter: Bars(
+                      d.trimp7,
+                      p.on(C.purple),
                       highlight: d.trimp7.last == null ? -1 : 6,
                       axis: axis,
-                      t: animate(context, 1))),
-            );
-          }),
+                      t: animate(context, 1),
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+          const SizedBox(height: S.x4),
+          // Absent is absent. `?? 0` used to render "Fatigue 0" — a rest week —
+          // for a pipeline that had simply not produced the number.
+          //
+          // No 'Fitness' entry: it is `ld.ctl`, which the headline two rows up is
+          // already printing at 34 pt under the word "fitness". One number, once.
+          InlineMetrics([
+            (
+              loc?.workoutFatigueLabel ?? 'Fatigue',
+              ld.atl?.round().toString() ?? notYet,
+              C.orange,
+            ),
+            (
+              loc?.workoutFormLabel ?? 'Form',
+              ld.tsb == null
+                  ? notYet
+                  : '${ld.tsb! >= 0 ? '+' : '−'}${ld.tsb!.abs().round()}',
+              C.purple,
+            ),
+          ]),
         ],
-        const SizedBox(height: S.x4),
-        // Absent is absent. `?? 0` used to render "Fatigue 0" — a rest week —
-        // for a pipeline that had simply not produced the number.
-        //
-        // No 'Fitness' entry: it is `ld.ctl`, which the headline two rows up is
-        // already printing at 34 pt under the word "fitness". One number, once.
-        InlineMetrics([
-          (loc?.workoutFatigueLabel ?? 'Fatigue',
-              ld.atl?.round().toString() ?? notYet, C.orange),
-          (
-            loc?.workoutFormLabel ?? 'Form',
-            ld.tsb == null
-                ? notYet
-                : '${ld.tsb! >= 0 ? '+' : '−'}${ld.tsb!.abs().round()}',
-            C.purple
-          ),
-        ]),
-      ]),
+      ),
     );
   }
 
@@ -393,71 +474,128 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     return tsb > 5
         ? (loc?.workoutFormFresh ?? 'Fresh')
         : tsb >= -10
-            ? (loc?.workoutFormSteady ?? 'Steady')
-            : tsb >= -30
-                ? (loc?.workoutFormBuilding ?? 'Building')
-                : (loc?.workoutFormOverreaching ?? 'Overreaching');
+        ? (loc?.workoutFormSteady ?? 'Steady')
+        : tsb >= -30
+        ? (loc?.workoutFormBuilding ?? 'Building')
+        : (loc?.workoutFormOverreaching ?? 'Overreaching');
   }
 
   // ─────────────── ACTIVITIES ───────────────
+  Widget _quickTiles(
+    BuildContext c,
+    _WorkoutData d,
+    List<Activity> activities,
+  ) => LayoutBuilder(
+    builder: (_, box) {
+      final columns = bigText(c) ? 1 : 3;
+      final width = (box.maxWidth - S.x3 * (columns - 1)) / columns;
+      return Wrap(
+        spacing: S.x3,
+        runSpacing: S.x3,
+        children: [
+          for (final a in activities)
+            SizedBox(
+              width: width,
+              child: _QuickTile(
+                a,
+                (open) async => open<void>(
+                  ActivitySetup(a, weightKg: d.weightKg, host: _host(d)),
+                ),
+              ),
+            ),
+        ],
+      );
+    },
+  );
+
   List<Widget> _activities(BuildContext c, _WorkoutData d) {
     final p = P.of(c);
     final loc = AppLocalizations.of(c);
+    final needle = _activitySearch.text.trim().toLowerCase();
+    final results = [
+      for (final a in allActivities)
+        if (a.matches(needle, AppLocalizations.of(c))) a,
+    ];
     return [
-      Pressable(
-        onTap: () => _openPicker(c, d),
-        semanticLabel: loc?.workoutSearchActivitiesLabel ?? 'Search activities',
-        child: Container(
-          constraints: const BoxConstraints(minHeight: S.tap),
-          padding: const EdgeInsets.symmetric(horizontal: S.x4),
-          decoration: BoxDecoration(color: p.card2, borderRadius: R.rMd),
-          child: Row(children: [
-            Icon(LucideIcons.search, size: 17, color: p.ink3),
-            const SizedBox(width: S.x2),
-            Text(
-                loc?.workoutSearchActivitiesCount(allActivities.length) ??
-                    'Search ${allActivities.length} activities',
-                style: F.body.copyWith(color: p.ink3)),
-          ]),
-        ),
+      DomainSearchField(
+        controller: _activitySearch,
+        label: loc?.workoutSearchActivitiesLabel ?? 'Search activities',
+        hint:
+            loc?.workoutSearchActivitiesCount(allActivities.length) ??
+            'Search ${allActivities.length} activities',
+        clearLabel: loc?.journalComposeClear ?? 'Clear',
+        accent: C.domMove,
+        onChanged: (_) => setState(() {}),
       ),
       const SizedBox(height: S.x5),
-      Text(loc?.workoutQuickStartHeader ?? 'QUICK START',
-          style: F.over.copyWith(color: p.ink3)),
-      const SizedBox(height: S.x3),
-      for (var row = 0; row < 2; row++) ...[
-        if (row > 0) const SizedBox(height: S.x3),
-        Row(children: [
-          for (var i = row * 3; i < row * 3 + 3; i++) ...[
-            if (i % 3 > 0) const SizedBox(width: S.x3),
-            Expanded(
-              child: _QuickTile(
-                quickStart[i],
-                () => Navigator.of(c).push(MaterialPageRoute(
-                    builder: (_) => ActivitySetup(quickStart[i],
-                        weightKg: d.weightKg, host: _host(d)))),
-              ),
-            ),
-          ],
-        ]),
-      ],
-      for (final g in activityLibrary)
-        Section(
-          g.name,
+      if (needle.isNotEmpty) ...[
+        if (results.isEmpty)
+          StatusCard(
+            loc?.activityPickerNoMatchTitle ?? 'No activity matches that',
+            loc?.activityPickerNoMatchBody ??
+                'Pick the closest activity in the catalogue.',
+            icon: LucideIcons.search,
+          )
+        else
           Surface(
             pad: const EdgeInsets.symmetric(horizontal: S.x4),
-            child: Column(children: [
-              for (var i = 0; i < g.items.length; i++) ...[
-                ActivityRow(g.items[i],
-                    weightKg: d.weightKg,
-                    onTap: () => Navigator.of(c).push(MaterialPageRoute(
-                        builder: (_) => ActivitySetup(g.items[i],
-                            weightKg: d.weightKg, host: _host(d))))),
-                if (i < g.items.length - 1) Divider(color: p.line, height: 1),
+            child: Column(
+              children: [
+                for (var i = 0; i < results.length; i++) ...[
+                  DetailLink(
+                    builder: (open) => ActivityRow(
+                      results[i],
+                      weightKg: d.weightKg,
+                      onTap: () => open<void>(
+                        ActivitySetup(
+                          results[i],
+                          weightKg: d.weightKg,
+                          host: _host(d),
+                        ),
+                      ),
+                    ),
+                  ),
+                  if (i < results.length - 1) Divider(color: p.line, height: 1),
+                ],
               ],
-            ]),
+            ),
           ),
+      ] else ...[
+        Text(
+          loc?.workoutQuickStartHeader ?? 'QUICK START',
+          style: F.over.copyWith(color: p.ink3),
         ),
+        const SizedBox(height: S.x3),
+        _quickTiles(c, d, quickStart),
+        for (final g in activityLibrary)
+          Section(
+            g.name,
+            Surface(
+              pad: const EdgeInsets.symmetric(horizontal: S.x4),
+              child: Column(
+                children: [
+                  for (var i = 0; i < g.items.length; i++) ...[
+                    DetailLink(
+                      builder: (open) => ActivityRow(
+                        g.items[i],
+                        weightKg: d.weightKg,
+                        onTap: () => open<void>(
+                          ActivitySetup(
+                            g.items[i],
+                            weightKg: d.weightKg,
+                            host: _host(d),
+                          ),
+                        ),
+                      ),
+                    ),
+                    if (i < g.items.length - 1)
+                      Divider(color: p.line, height: 1),
+                  ],
+                ],
+              ),
+            ),
+          ),
+      ],
       // Title and action, no body. Losing the prose is right; losing the door
       // to the profile is not — without a weight there is no calorie estimate
       // at all, and this is the only place that says so and offers the fix.
@@ -467,7 +605,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
               'Calorie estimates need your weight',
           '',
           fix: loc?.workoutAddWeightFix ?? 'Add weight in profile',
-          onFix: () => openProfile(c),
+          destination: const ProfileHome(),
           icon: LucideIcons.flame,
         ),
       if (d.weightKg != null) ...[
@@ -486,8 +624,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
   /// Open a screen that can write a session, then re-read. Every write path on
   /// this tab goes through here: `RevisionReload` covers the writers that bump
   /// `AppState.insightsRevision`, and this covers the ones that do not.
-  Future<void> _push(BuildContext c, Widget w) async {
-    await Navigator.of(c).push(MaterialPageRoute<void>(builder: (_) => w));
+  Future<void> _push(DetailOpener open, Widget w) async {
+    await open<void>(w);
     if (mounted) reload();
   }
 
@@ -515,8 +653,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
                 'is logged until you say so.',
         fix: loc?.workoutReviewFix(n) ?? 'Review ${n == 1 ? 'it' : 'them'}',
         icon: LucideIcons.radar,
-        onFix: () =>
-            _push(c, WorkoutSuggestionScreen()),
+        onNavigate: (open) => _push(open, WorkoutSuggestionScreen()),
       ),
       const SizedBox(height: S.x5),
     ];
@@ -532,94 +669,316 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
               'recorded across them, like any other session.',
       fix: loc?.workoutLogPastFix ?? 'Log a past workout',
       icon: LucideIcons.calendarPlus,
-      onFix: () => _push(c, const LogWorkout()),
+      onNavigate: (open) => _push(open, const LogWorkout()),
     );
   }
 
-  List<Widget> _history(BuildContext c, _WorkoutData d) {
+  Widget _historyPage(BuildContext c, _WorkoutData d, double bottom) {
+    _historyLoad ??= _loadWorkoutHistory(
+      context.read<AppState>(),
+      _historyWindow,
+    );
+    return FutureBuilder<_WorkoutHistory>(
+      future: _historyLoad,
+      builder: (c, snap) => ListView(
+        key: const PageStorageKey('workout-tab-2'),
+        padding: EdgeInsets.fromLTRB(S.x4, 0, S.x4, bottom),
+        children: _history(c, d, snap),
+      ),
+    );
+  }
+
+  Widget _historyChip(
+    BuildContext c,
+    String label,
+    bool selected,
+    VoidCallback onTap,
+  ) {
+    final p = P.of(c);
+    return Semantics(
+      selected: selected,
+      child: Pressable(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: motion(c, Motion.base),
+          curve: Motion.effectsCurve(c),
+          padding: const EdgeInsets.symmetric(horizontal: S.x3, vertical: S.x2),
+          decoration: BoxDecoration(
+            color: selected ? p.wash(C.domMove) : p.card2,
+            borderRadius: R.rPill,
+          ),
+          child: Text(
+            label,
+            style: F.cap.copyWith(color: selected ? p.on(C.domMove) : p.ink3),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickHistoryActivity(List<_PastWorkout> workouts) async {
+    final loc = AppLocalizations.of(context);
+    final names = {
+      for (final w in workouts) w.title,
+      ?_historyActivity,
+    }.toList()..sort();
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      sheetAnimationStyle: sheetMotion(context),
+      backgroundColor: P.of(context).card,
+      shape: const RoundedRectangleBorder(borderRadius: R.rXxl),
+      builder: (c) => SafeArea(
+        child: SizedBox(
+          height: MediaQuery.sizeOf(c).height * .7,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: S.x4),
+                child: NavBar(loc?.workoutHistoryActivityLabel ?? 'Activity'),
+              ),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.all(S.x4),
+                  children: [
+                    for (final name in ['', ...names])
+                      Pressable(
+                        onTap: () => Navigator.of(c).pop(name),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: S.x3),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  name.isEmpty
+                                      ? (loc?.workoutHistoryAllActivities ??
+                                            'All activities')
+                                      : name,
+                                  style: F.body.copyWith(color: P.of(c).ink),
+                                ),
+                              ),
+                              if (name == (_historyActivity ?? ''))
+                                Icon(
+                                  LucideIcons.check,
+                                  color: P.of(c).on(C.domMove),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    if (mounted && picked != null) {
+      setState(() => _historyActivity = picked.isEmpty ? null : picked);
+    }
+  }
+
+  void _resetHistoryFilters() {
+    setState(() {
+      _historyActivity = null;
+      _historySource = 0;
+      _historyRange = 'all';
+      _readHistory();
+    });
+    Prefs.setString(Prefs.workoutsRange, 'all');
+  }
+
+  List<Widget> _history(
+    BuildContext c,
+    _WorkoutData d,
+    AsyncSnapshot<_WorkoutHistory> snap,
+  ) {
     final p = P.of(c);
     final loc = AppLocalizations.of(c);
-    if (d.workouts.isEmpty) {
-      return [
-        ..._suggestionCards(c, d),
-        StatusCard(
-          loc?.workoutNoSessionsTitle ?? 'No sessions recorded yet',
-          loc?.workoutNoSessionsBody ?? 'Sessions appear here once you start one.',
-          fix: loc?.workoutStartWorkoutFix ?? 'Start a workout',
-          onFix: () => _openPicker(c, d),
-          icon: LucideIcons.dumbbell,
-        ),
-        const SizedBox(height: S.x5),
-        _logPastCard(c),
-      ];
+    final loading = snap.connectionState != ConnectionState.done;
+    // FutureBuilder keeps the previous future's data while a new range reads.
+    // Never label that previous range's sessions with the new range's dates.
+    final history = loading ? null : snap.data;
+    final failed = snap.hasError || history?.failed == true;
+    final rows = history?.workouts ?? const <_PastWorkout>[];
+    final shown = [
+      for (final w in rows)
+        if ((_historyActivity == null || w.title == _historyActivity) &&
+            (_historySource == 0 ||
+                (_historySource == 1 && w.importedFrom == null) ||
+                (_historySource == 2 && w.importedFrom != null)))
+          w,
+    ];
+    final dates = MaterialLocalizations.of(c);
+    final last = DateTime(
+      _historyWindow.until.year,
+      _historyWindow.until.month,
+      _historyWindow.until.day - 1,
+    );
+    final rangeLabel = _historyWindow.from == null
+        ? (loc?.workoutHistoryAllThrough(dates.formatCompactDate(last)) ??
+              'All stored history through ${dates.formatCompactDate(last)}')
+        : '${dates.formatCompactDate(_historyWindow.from!)} – '
+              '${dates.formatCompactDate(last)}';
+    final groups = <String, List<_PastWorkout>>{};
+    for (final w in shown) {
+      groups.putIfAbsent(dayLabelOf(w.start), () => []).add(w);
     }
-    final importedThisWeek = d.weekImported;
     return [
-      ..._suggestionCards(c, d),
-      Row(children: [
-        Expanded(child: _sum(p, '${d.workoutsTracked ?? d.workouts.length}',
-            loc?.workoutTrackedLabel ?? 'Tracked')),
-        const SizedBox(width: S.x3),
-        Expanded(child: _sum(p, '${d.weekCount}',
-            loc?.workoutThisWeek ?? 'This week')),
-        const SizedBox(width: S.x3),
-        Expanded(
-            child: _sum(
-                p,
-                d.weekLoad == null
-                    ? (loc?.workoutNoneLabel ?? 'None')
-                    : d.weekLoad!.round().toString(),
-                loc?.workoutWeeklyLoadLabel ?? 'Weekly load')),
-      ]),
-      // The seam, said where the two numbers sit next to each other. "This
-      // week" counts every session you did; "Weekly load" counts only the ones
-      // this band watched — and without this line the gap between them reads
-      // as a bug rather than as the limit it is.
-      if (importedThisWeek > 0) ...[
-        const SizedBox(height: S.x3),
+      Wrap(
+        spacing: S.x2,
+        runSpacing: S.x2,
+        children: [
+          for (final range in [
+            ('month', loc?.workoutHistoryRangeMonth ?? '1 month'),
+            ('3m', loc?.workoutHistoryRangeQuarter ?? '3 months'),
+            ('year', loc?.metricDetailRangeYear ?? 'Year'),
+            ('all', loc?.workoutHistoryRangeAll ?? 'All time'),
+          ])
+            _historyChip(
+              c,
+              range.$2,
+              _historyRange == range.$1,
+              () => _selectHistoryRange(range.$1),
+            ),
+        ],
+      ),
+      const SizedBox(height: S.x3),
+      Text(
+        rangeLabel,
+        key: const ValueKey('workout-history-range'),
+        style: F.cap.copyWith(color: p.ink3),
+      ),
+      const SizedBox(height: S.x3),
+      Wrap(
+        spacing: S.x2,
+        runSpacing: S.x2,
+        children: [
+          for (final (i, label) in [
+            (0, loc?.workoutHistoryAllSources ?? 'All sources'),
+            (1, loc?.workoutHistoryRecorded ?? 'Recorded here'),
+            (2, loc?.workoutHistoryImported ?? 'Imported'),
+          ])
+            _historyChip(
+              c,
+              label,
+              _historySource == i,
+              () => setState(() => _historySource = i),
+            ),
+          _historyChip(
+            c,
+            _historyActivity ??
+                (loc?.workoutHistoryAllActivities ?? 'All activities'),
+            _historyActivity != null,
+            () => _pickHistoryActivity(rows),
+          ),
+        ],
+      ),
+      const SizedBox(height: S.x3),
+      if (d.workoutsTracked != null)
         Text(
-          loc?.workoutImportedThisWeekNote(importedThisWeek, storeName) ??
-              '$importedThisWeek of this week’s sessions came from $storeName. '
-                  'They count here, and they are left out of weekly load — an '
-                  'imported workout arrives with no heart-rate trace, and a load '
-                  'number without one would be invented.',
-          style: F.cap.copyWith(color: p.ink3, height: 1.5),
+          loc?.workoutHistoryRecordedCount(d.workoutsTracked!) ??
+              '${d.workoutsTracked} recorded here · all time',
+          style: F.cap.copyWith(color: p.ink3),
+        ),
+      if (!loading && history != null && !failed) ...[
+        const SizedBox(height: S.x2),
+        Text(
+          loc?.workoutHistoryShownCount(shown.length) ??
+              'Sessions in this view: ${shown.length}',
+          key: const ValueKey('workout-history-count'),
+          style: F.cap.copyWith(color: p.ink3),
         ),
       ],
-      // The import card lives UP HERE, under the numbers it feeds — at the
-      // bottom of a long list nobody reached it without scrolling past every
-      // session it exists to fill.
-      const SizedBox(height: S.x3),
-      ..._importCard(c, d),
-      ..._morningAfter(c, p, d),
       const SizedBox(height: S.x5),
-      for (final w in d.workouts) ...[
-        _HistoryRow(w,
-            weightKg: d.weightKg,
-            onDelete: w.id.isEmpty
-                ? null
-                : () => _confirmDeleteWorkout(c, w),
-            // A retime is a re-score over the new window, so it is offered
-            // only where there is something of ours to re-score: an imported
-            // row's times belong to the app that recorded it, and this band
-            // measured nothing across them.
-            onRetime: w.importedFrom == null && w.id.isNotEmpty
-                ? () => _push(
-                      c,
-                      LogWorkout(
-                        sessionId: w.id,
-                        start: w.start,
-                        end: w.start.add(w.duration),
-                        activity: w.activity,
-                        title: loc?.workoutFixTimes ?? 'Fix the times',
-                      ),
-                    )
-                : null),
-        const SizedBox(height: S.x3),
-      ],
+      ..._suggestionCards(c, d),
+      ..._importCard(c, d),
       const SizedBox(height: S.x3),
       _logPastCard(c),
+      ..._morningAfter(c, p, d),
+      const SizedBox(height: S.x5),
+      if (loading)
+        StatusCard(
+          loc?.workoutHistoryLoading ?? 'Reading your workout history…',
+          '',
+          icon: LucideIcons.clock,
+        ),
+      if (failed) ...[
+        StatusCard(
+          loc?.workoutHistoryReadFailedTitle ??
+              'Could not read your workout history',
+          loc?.workoutHistoryReadFailedBody ??
+              'Some stored sessions could not be read. Try again.',
+          fix: loc?.logWorkoutTryAgain ?? 'Try again',
+          onFix: () => setState(_readHistory),
+          icon: LucideIcons.circleAlert,
+        ),
+        const SizedBox(height: S.x3),
+      ],
+      if (!loading && !failed && shown.isEmpty)
+        if (_historyRange == 'all' && rows.isEmpty)
+          StatusCard(
+            loc?.workoutNoSessionsTitle ?? 'No sessions recorded yet',
+            loc?.workoutNoSessionsBody ??
+                'Sessions appear here once you start one.',
+            fix: loc?.workoutStartWorkoutFix ?? 'Start a workout',
+            onNavigate: (open) => _openPicker(open, d),
+            icon: LucideIcons.dumbbell,
+          )
+        else
+          StatusCard(
+            loc?.workoutHistoryNoMatchesTitle ??
+                'No sessions match these filters',
+            loc?.workoutHistoryNoMatchesBody ??
+                'Try another date range, activity, or source.',
+            fix: loc?.workoutHistoryResetFilters ?? 'Reset filters',
+            onFix: _resetHistoryFilters,
+            icon: LucideIcons.search,
+          ),
+      for (final group in groups.entries) ...[
+        Padding(
+          padding: const EdgeInsets.only(bottom: S.x3, top: S.x2),
+          child: Text(
+            _historyDate(c, group.value.first.start),
+            key: ValueKey('workout-date-${group.key}'),
+            style: F.head.copyWith(color: p.ink),
+          ),
+        ),
+        for (final w in group.value) ...[
+          _HistoryRow(
+            w,
+            key: ValueKey(
+              'workout-history-${w.importedFrom == null ? 'recorded' : 'imported'}-${w.id}',
+            ),
+            weightKg: d.weightKg,
+            onDelete: w.id.isEmpty ? null : () => _confirmDeleteWorkout(c, w),
+            onRetime: w.importedFrom == null && w.id.isNotEmpty
+                ? (open) => _push(
+                    open,
+                    LogWorkout(
+                      sessionId: w.id,
+                      start: w.start,
+                      end: w.start.add(w.duration),
+                      activity: w.activity,
+                      title: loc?.workoutFixTimes ?? 'Fix the times',
+                    ),
+                  )
+                : null,
+          ),
+          const SizedBox(height: S.x3),
+        ],
+      ],
     ];
+  }
+
+  String _historyDate(BuildContext c, DateTime date) {
+    final loc = AppLocalizations.of(c);
+    final days = calendarDaysBetween(date, DateTime.now());
+    final label = MaterialLocalizations.of(c).formatFullDate(date);
+    if (days == 0) return '${loc?.logWorkoutToday ?? 'Today'} · $label';
+    if (days == 1) return '${loc?.logWorkoutYesterday ?? 'Yesterday'} · $label';
+    return label;
   }
 
   /// Delete one session — recorded or imported. For an IMPORTED session the
@@ -631,15 +990,16 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     final loc = AppLocalizations.of(c);
     final ok = await confirmRemove(
       c,
-      title: loc?.workoutConfirmDeleteTitle(w.activity.name.toLowerCase()) ??
+      title:
+          loc?.workoutConfirmDeleteTitle(w.activity.label(loc).toLowerCase()) ??
           'Delete this ${w.activity.name.toLowerCase()}?',
       body: w.importedFrom == null
           ? (loc?.workoutDeleteBodyOwn(storeName) ??
-              'It disappears from OpenStrap. A copy in $storeName, if there is '
-                  'one, stays where it is.')
+                'It disappears from OpenStrap. A copy in $storeName, if there is '
+                    'one, stays where it is.')
           : (loc?.workoutDeleteBodyImported(storeName) ??
-              'It disappears from OpenStrap and will not be re-imported. '
-                  'The original in $storeName stays.'),
+                'It disappears from OpenStrap and will not be re-imported. '
+                    'The original in $storeName stays.'),
     );
     if (!ok || !mounted) return;
     if (w.importedFrom != null && w.id.isNotEmpty) {
@@ -652,9 +1012,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
       await context.read<AppState>().deleteWorkout(w.id);
     }
     if (!mounted) return;
-    setState(() {
-      _load = _loadWorkoutData(context.read<AppState>());
-    });
+    reload();
   }
 
   /// Bring in what another app recorded. On History because that is the list
@@ -665,57 +1023,71 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     final loc = AppLocalizations.of(c);
     return [
       Surface(
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          // ONE ROW in the parent card — no nested box: tick = hourly sweep,
-          // ↻ = fetch NOW (only meaningful while the tick is on). The
-          // refresh tap is the only thing that ever prompts for access.
-          Row(
-            children: [
-              Pressable(
-                semanticLabel: _autoImport
-                    ? (loc?.workoutAutoImportOnLabel ??
-                        'Auto-import on. Tap to turn off.')
-                    : (loc?.workoutAutoImportOffLabel ??
-                        'Auto-import off. Tap to turn on.'),
-                onTap: () => _setAutoImport(!_autoImport),
-                child: Icon(
-                  _autoImport ? LucideIcons.circleCheckBig : LucideIcons.circle,
-                  size: 22,
-                  color: _autoImport ? p.on(C.domMove) : p.ink3,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // ONE ROW in the parent card — no nested box: tick = hourly sweep,
+            // ↻ = fetch NOW (only meaningful while the tick is on). The
+            // refresh tap is the only thing that ever prompts for access.
+            Row(
+              children: [
+                Pressable(
+                  semanticLabel: _autoImport
+                      ? (loc?.workoutAutoImportOnLabel ??
+                            'Auto-import on. Tap to turn off.')
+                      : (loc?.workoutAutoImportOffLabel ??
+                            'Auto-import off. Tap to turn on.'),
+                  onTap: () => _setAutoImport(!_autoImport),
+                  child: Icon(
+                    _autoImport
+                        ? LucideIcons.circleCheckBig
+                        : LucideIcons.circle,
+                    size: 22,
+                    color: _autoImport ? p.on(C.domMove) : p.ink3,
+                  ),
                 ),
-              ),
-              const SizedBox(width: S.x3),
-              Expanded(
-                child: Text(
+                const SizedBox(width: S.x3),
+                Expanded(
+                  child: Text(
                     loc?.workoutImportFromStore(storeName) ??
                         'Import from $storeName',
                     style: F.body.copyWith(
-                        color: p.ink, fontWeight: FontWeight.w600)),
-              ),
-              Pressable(
-                semanticLabel: loc?.workoutFetchNowLabel ?? 'Fetch workouts now',
-                onTap: (!_autoImport || _importing)
-                    ? null
-                    : () => unawaited(_importWorkouts()),
-                child: Padding(
-                  padding: const EdgeInsets.all(S.x2),
-                  child: _importing || !_autoImport
-                      ? Icon(LucideIcons.refreshCw, size: 18, color: p.ink3)
-                      : Icon(LucideIcons.refreshCw,
-                          size: 18, color: p.on(C.domMove)),
+                      color: p.ink,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Pressable(
+                  semanticLabel:
+                      loc?.workoutFetchNowLabel ?? 'Fetch workouts now',
+                  onTap: (!_autoImport || _importing)
+                      ? null
+                      : () => unawaited(_importWorkouts()),
+                  child: Padding(
+                    padding: const EdgeInsets.all(S.x2),
+                    child: _importing || !_autoImport
+                        ? Icon(LucideIcons.refreshCw, size: 18, color: p.ink3)
+                        : Icon(
+                            LucideIcons.refreshCw,
+                            size: 18,
+                            color: p.on(C.domMove),
+                          ),
+                  ),
+                ),
+              ],
+            ),
+            if (_importNote != null) ...[
+              const SizedBox(height: S.x3),
+              Text(
+                _importNote!,
+                style: F.cap.copyWith(
+                  color: _importFailed ? p.on(C.red) : p.ink2,
+                  height: 1.5,
                 ),
               ),
             ],
-          ),
-          if (_importNote != null) ...[
-            const SizedBox(height: S.x3),
-            Text(
-              _importNote!,
-              style: F.cap.copyWith(
-                  color: _importFailed ? p.on(C.red) : p.ink2, height: 1.5),
-            ),
           ],
-        ]),
+        ),
       ),
     ];
   }
@@ -728,6 +1100,11 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
   @override
   void initState() {
     super.initState();
+    final savedRange = Prefs.getString(Prefs.workoutsRange, 'month');
+    _historyRange = ['month', '3m', 'year', 'all'].contains(savedRange)
+        ? savedRange
+        : 'month';
+    _historyWindow = workoutHistoryWindow(_historyRange, DateTime.now());
     () async {
       final on = await AutoWorkoutImport.isEnabled();
       if (!mounted) return;
@@ -769,7 +1146,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
         if (!mounted) return;
         final loc = AppLocalizations.of(context);
         setState(() {
-          _importNote = loc?.workoutImportDenied(storeName) ??
+          _importNote =
+              loc?.workoutImportDenied(storeName) ??
               '$storeName did not grant workouts. Nothing was read.';
           _importFailed = true;
         });
@@ -780,7 +1158,8 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
         if (!mounted) return;
         final loc = AppLocalizations.of(context);
         setState(() {
-          _importNote = loc?.workoutImportEmpty(storeName) ??
+          _importNote =
+              loc?.workoutImportEmpty(storeName) ??
               'Nothing came back. $storeName holds no workouts '
                   'inside the window it will share.';
           _importFailed = false;
@@ -797,15 +1176,16 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
           // Said with the result rather than near it: this is the moment the
           // user is looking for their map.
           ? (loc?.workoutImportNoRoutes(storeName) ??
-              ' $storeName will not share routes, so none have coordinates.')
+                ' $storeName will not share routes, so none have coordinates.')
           : res.withRoutes == 0
-              ? (loc?.workoutImportNoneWithRoute ??
-                  ' None of them had a route recorded.')
-              : (loc?.workoutImportSomeWithRoute(res.withRoutes) ??
-                  ' ${res.withRoutes} came with a route.');
+          ? (loc?.workoutImportNoneWithRoute ??
+                ' None of them had a route recorded.')
+          : (loc?.workoutImportSomeWithRoute(res.withRoutes) ??
+                ' ${res.withRoutes} came with a route.');
       if (!mounted) return;
       setState(() {
-        _importNote = (loc?.workoutImportBroughtIn(res.workouts) ??
+        _importNote =
+            (loc?.workoutImportBroughtIn(res.workouts) ??
                 '${res.workouts} workout'
                     '${res.workouts == 1 ? '' : 's'} brought in.') +
             route;
@@ -823,6 +1203,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
         setState(() {
           _importing = false;
           _load = _loadWorkoutData(context.read<AppState>());
+          if (_historyLoad != null) _readHistory();
         });
       }
     }
@@ -848,17 +1229,19 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
       Section(
         loc?.workoutMorningAfterTitle ?? 'The morning after',
         Surface(
-          child: Column(children: [
-            for (final e in d.morningAfter) _morningRow(c, e),
-            const SizedBox(height: S.x3),
-            Text(
-              loc?.workoutMorningAfterBody ??
-                  'Your own history, not a rule about the activity — these '
-                      'mornings also had whatever evening came with them. Nothing '
-                      'here is a reason to skip a session.',
-              style: F.cap.copyWith(color: p.ink3, height: 1.5),
-            ),
-          ]),
+          child: Column(
+            children: [
+              for (final e in d.morningAfter) _morningRow(c, e),
+              const SizedBox(height: S.x3),
+              Text(
+                loc?.workoutMorningAfterBody ??
+                    'Your own history, not a rule about the activity — these '
+                        'mornings also had whatever evening came with them. Nothing '
+                        'here is a reason to skip a session.',
+                style: F.cap.copyWith(color: p.ink3, height: 1.5),
+              ),
+            ],
+          ),
         ),
       ),
     ];
@@ -874,7 +1257,7 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
     return MetricRow(
       a?.icon ?? LucideIcons.activity,
       a?.color ?? C.purple,
-      loc?.workoutAfterActivity(a?.name ?? e.type) ??
+      loc?.workoutAfterActivity(a?.label(loc) ?? e.type) ??
           'After ${a?.name ?? e.type}',
       e.exceedsMdc
           ? '$sign${e.delta.abs().toStringAsFixed(1)}'
@@ -884,55 +1267,50 @@ class _WorkoutScreenState extends State<WorkoutScreen> with RevisionReload {
         final metricLabel = rhr
             ? (loc?.workoutRestingHeartRateLabel ?? 'Resting heart rate')
             : (loc?.workoutHrvLabel ?? 'HRV');
-        final morningCount = loc?.workoutMorningCount(e.n) ??
+        final morningCount =
+            loc?.workoutMorningCount(e.n) ??
             '${e.n} morning${e.n == 1 ? '' : 's'}';
         final insideRangeSuffix = e.exceedsMdc
             ? ''
             : (loc?.workoutInsideRangeSuffix ??
-                ' · inside your night-to-night range');
+                  ' · inside your night-to-night range');
         return '$metricLabel · $morningCount$insideRangeSuffix';
       }(),
     );
   }
-
-  Widget _sum(P p, String v, String l) => Surface(
-        pad: const EdgeInsets.symmetric(vertical: S.x4),
-        child: Column(children: [
-          Text(v, style: F.n24.copyWith(color: p.ink), maxLines: 1),
-          const SizedBox(height: S.x1),
-          Text(l,
-              style: F.over.copyWith(color: p.ink3),
-              textAlign: TextAlign.center),
-        ]),
-      );
 }
 
 class _QuickTile extends StatelessWidget {
   final Activity a;
-  final VoidCallback onTap;
-  const _QuickTile(this.a, this.onTap);
+  final Future<void> Function(DetailOpener) onNavigate;
+  const _QuickTile(this.a, this.onNavigate);
 
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
     return Surface(
       pad: const EdgeInsets.symmetric(vertical: S.x4, horizontal: S.x2),
-      onTap: onTap,
-      semanticLabel: a.name,
-      child: Column(children: [
-        Container(
-          width: 40,
-          height: 40,
-          decoration:
-              BoxDecoration(color: p.wash(a.color), borderRadius: R.rMd),
-          child: Icon(a.icon, size: 19, color: p.on(a.color)),
-        ),
-        const SizedBox(height: S.x2),
-        Text(a.name,
+      onNavigate: onNavigate,
+      semanticLabel: a.label(AppLocalizations.of(c)),
+      child: Column(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: p.wash(a.color),
+              borderRadius: R.controlOf(c),
+            ),
+            child: Icon(a.icon, size: 19, color: p.on(a.color)),
+          ),
+          const SizedBox(height: S.x2),
+          Text(
+            a.label(AppLocalizations.of(c)),
             style: F.over.copyWith(color: p.ink2),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis),
-      ]),
+            textAlign: TextAlign.center,
+          ),
+        ],
+      ),
     );
   }
 }
@@ -946,19 +1324,23 @@ class _HistoryRow extends StatelessWidget {
 
   /// Widen or correct this session's window. Null for an imported row, and for
   /// a session with no id to retime.
-  final VoidCallback? onRetime;
+  final Future<void> Function(DetailOpener)? onRetime;
 
   /// Remove this session locally. Null hides the control (no id to delete).
   final VoidCallback? onDelete;
 
-  const _HistoryRow(this.w,
-      {this.weightKg, this.onRetime, this.onDelete});
+  const _HistoryRow(
+    this.w, {
+    super.key,
+    this.weightKg,
+    this.onRetime,
+    this.onDelete,
+  });
 
-  Future<void> _open(BuildContext c) async {
-    final nav = Navigator.of(c);
+  Future<void> _open(BuildContext c, DetailOpener open) async {
     final r = await _detailOf(c.read<AppState>(), w);
-    await nav.push(MaterialPageRoute(
-        builder: (_) => ActivitySummary(r, weightKg: weightKg)));
+    if (!c.mounted) return;
+    await open<void>(ActivitySummary(r, weightKg: weightKg));
   }
 
   @override
@@ -974,120 +1356,157 @@ class _HistoryRow extends StatelessWidget {
       // workout it is. A screen that presents an Apple Watch run exactly like
       // one of ours is the fabrication this whole table exists to avoid, so
       // the row stays a row until that screen can name its source.
-      onTap: w.importedFrom == null ? () => _open(c) : null,
-      child: Column(children: [
-        Row(children: [
-          Container(
-            width: 40,
-            height: 40,
-            decoration:
-                BoxDecoration(color: p.wash(a.color), borderRadius: R.rMd),
-            child: Icon(a.icon, size: 19, color: p.on(a.color)),
-          ),
-          const SizedBox(width: S.x3),
-          Expanded(
-            child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(children: [
-                    Flexible(
-                      // The store's own word for it when it is not ours: the
-                      // catalogue knows the ~40 types this app can start, and
-                      // "Workout" over a surf loses the one thing we were told.
-                      child: Text(w.importedTitle ?? a.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: F.body.copyWith(
-                              color: p.ink, fontWeight: FontWeight.w600)),
+      onNavigate: w.importedFrom == null ? (open) => _open(c, open) : null,
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 40,
+                height: 40,
+                decoration: BoxDecoration(
+                  color: p.wash(a.color),
+                  borderRadius: R.controlOf(c),
+                ),
+                child: Icon(a.icon, size: 19, color: p.on(a.color)),
+              ),
+              const SizedBox(width: S.x3),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          // The store's own word for it when it is not ours: the
+                          // catalogue knows the ~40 types this app can start, and
+                          // "Workout" over a surf loses the one thing we were told.
+                          child: Text(
+                            w.title,
+                            style: F.body.copyWith(
+                              color: p.ink,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        // The flag the setup screen promised, visible on the one
+                        // list this session shows up in.
+                        if (w.private) ...[
+                          const SizedBox(width: S.x2),
+                          Icon(LucideIcons.lock, size: 13, color: p.ink3),
+                        ],
+                      ],
                     ),
-                    // The flag the setup screen promised, visible on the one
-                    // list this session shows up in.
-                    if (w.private) ...[
-                      const SizedBox(width: S.x2),
-                      Icon(LucideIcons.lock, size: 13, color: p.ink3),
-                    ],
-                  ]),
-                  // "Apple Watch · Today, 07:12". The source is not decoration
-                  // and it is not the word "imported": a band-measured session
-                  // and an Apple Watch session are different measurements, and
-                  // the name of the thing that took it is the difference.
-                  Text(
+                    // "Apple Watch · Today, 07:12". The source is not decoration
+                    // and it is not the word "imported": a band-measured session
+                    // and an Apple Watch session are different measurements, and
+                    // the name of the thing that took it is the difference.
+                    Text(
                       w.importedFrom == null
-                          ? w.when(loc)
-                          : '${w.importedFrom} · ${w.when(loc)}',
-                      style: F.over.copyWith(color: p.ink3)),
-                ]),
+                          ? formatClockOf(w.start)
+                          : '${w.importedFrom} · ${formatClockOf(w.start)}',
+                      style: F.over.copyWith(color: p.ink3),
+                    ),
+                  ],
+                ),
+              ),
+              if (onDelete != null) ...[
+                const SizedBox(width: S.x2),
+                Pressable(
+                  semanticLabel:
+                      loc?.workoutDeleteSessionLabel ?? 'Delete this session',
+                  onTap: onDelete,
+                  child: Padding(
+                    padding: const EdgeInsets.all(S.x1),
+                    child: Icon(LucideIcons.trash2, size: 17, color: p.ink3),
+                  ),
+                ),
+              ],
+            ],
           ),
           if (w.strain != null) ...[
-            Text(w.strain!.toStringAsFixed(1),
-                style: F.n17.copyWith(color: p.ink)),
-            const SizedBox(width: S.x1),
-            Padding(
-              padding: const EdgeInsets.only(top: S.x1),
-              // "strain", not "load". Training load is CTL/ATL over weeks;
-              // this is one session's 0–21 strain, and the two were being
-              // shown under the same word on the same screen.
-              child: Text(loc?.workoutStrainLabel ?? 'strain',
-                  style: F.over.copyWith(color: p.ink3)),
-            ),
-          ],
-          if (onDelete != null) ...[
-            const SizedBox(width: S.x2),
-            Pressable(
-              semanticLabel: loc?.workoutDeleteSessionLabel ?? 'Delete this session',
-              onTap: onDelete,
-              child: Padding(
-                padding: const EdgeInsets.all(S.x1),
-                child:
-                    Icon(LucideIcons.trash2, size: 17, color: p.ink3),
+            const SizedBox(height: S.x2),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Wrap(
+                spacing: S.x1,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                children: [
+                  Text(
+                    w.strain!.toStringAsFixed(1),
+                    style: F.n17.copyWith(color: p.ink),
+                  ),
+                  // One session's strain stays distinct from training load.
+                  Text(
+                    loc?.workoutStrainLabel ?? 'strain',
+                    style: F.over.copyWith(color: p.ink3),
+                  ),
+                ],
               ),
             ),
           ],
-        ]),
-        if (w.zoneMinutes.length == 5) ...[
+          if (w.zoneMinutes.length == 5) ...[
+            const SizedBox(height: S.x4),
+            ChartFrame(
+              title: loc?.workoutTimeInZonesTitle ?? 'TIME IN ZONES',
+              unit: loc?.workoutMinutesUnit ?? 'minutes',
+              height: 8,
+              legend: [
+                for (var i = 0; i < 5; i++)
+                  (
+                    'Z${i + 1} · ${w.zoneMinutes[i].round()}m',
+                    ZoneBar.cols(p)[i],
+                  ),
+              ],
+              child: CustomPaint(
+                size: Size.infinite,
+                painter: ZoneBar(w.zoneFractions, p),
+              ),
+            ),
+          ],
           const SizedBox(height: S.x4),
-          ChartFrame(
-            title: loc?.workoutTimeInZonesTitle ?? 'TIME IN ZONES',
-            unit: loc?.workoutMinutesUnit ?? 'minutes',
-            height: 8,
-            legend: [
-              for (var i = 0; i < 5; i++)
-                ('Z${i + 1} · ${w.zoneMinutes[i].round()}m', ZoneBar.cols(p)[i]),
-            ],
-            child: CustomPaint(
-                size: Size.infinite, painter: ZoneBar(w.zoneFractions, p)),
-          ),
+          for (var i = 0; i < stats.length; i++) ...[
+            if (i > 0) Divider(color: p.line, height: S.x5),
+            PosterStatRow(
+              icon: statIcon(stats[i].$1),
+              label: stats[i].$1,
+              value: stats[i].$2,
+              unit: stats[i].$3,
+              accent: p.on(a.color),
+            ),
+          ],
+          // The way to correct a window the detector clipped, or one a session
+          // started late. Nested inside the card's own tap: the inner Pressable
+          // wins, so the row still opens the summary everywhere else.
+          if (onRetime != null) ...[
+            Divider(color: p.line, height: S.x5),
+            DetailLink(
+              builder: (open) => Pressable(
+                onTap: () => onRetime!(open),
+                semanticLabel:
+                    loc?.workoutFixTimesOnSessionLabel ??
+                    'Fix the times on this session',
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(LucideIcons.clock, size: 14, color: p.on(C.blue)),
+                    const SizedBox(width: S.x2),
+                    Flexible(
+                      child: Text(
+                        loc?.workoutFixTimes ?? 'Fix the times',
+                        style: F.cap.copyWith(
+                          color: p.on(C.blue),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ],
-        const SizedBox(height: S.x4),
-        for (var i = 0; i < stats.length; i++) ...[
-          if (i > 0) Divider(color: p.line, height: S.x5),
-          PosterStatRow(
-            icon: statIcon(stats[i].$1),
-            label: stats[i].$1,
-            value: stats[i].$2,
-            unit: stats[i].$3,
-            accent: p.on(a.color),
-          ),
-        ],
-        // The way to correct a window the detector clipped, or one a session
-        // started late. Nested inside the card's own tap: the inner Pressable
-        // wins, so the row still opens the summary everywhere else.
-        if (onRetime != null) ...[
-          Divider(color: p.line, height: S.x5),
-          Pressable(
-            onTap: onRetime,
-            semanticLabel: loc?.workoutFixTimesOnSessionLabel ??
-                'Fix the times on this session',
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(LucideIcons.clock, size: 14, color: p.on(C.blue)),
-              const SizedBox(width: S.x2),
-              Text(loc?.workoutFixTimes ?? 'Fix the times',
-                  style: F.cap.copyWith(
-                      color: p.on(C.blue), fontWeight: FontWeight.w600)),
-            ]),
-          ),
-        ],
-      ]),
+      ),
     );
   }
 
@@ -1103,34 +1522,39 @@ class _HistoryRow extends StatelessWidget {
     final timeLabel = loc?.workoutTimeStatLabel ?? 'Time';
     final caloriesLabel = loc?.workoutCaloriesStatLabel ?? 'Calories';
     return w.importedFrom != null
-      ? [
-          // An imported row prints only what the recording app actually
-          // recorded, and drops the rest rather than saying "No reading": this
-          // band was not on the wrist, so there is no reading it could have
-          // taken and nothing was lost. The calories are the SOURCE's figure,
-          // shown under the source's name a line above — never added to ours,
-          // because two devices' calorie models summed is a number neither of
-          // them would stand behind.
-          (timeLabel, hms(w.duration), null),
-          if (w.distanceM != null && w.distanceM! > 0)
-            (loc?.workoutDistanceStatLabel ?? 'Distance',
+        ? [
+            // An imported row prints only what the recording app actually
+            // recorded, and drops the rest rather than saying "No reading": this
+            // band was not on the wrist, so there is no reading it could have
+            // taken and nothing was lost. The calories are the SOURCE's figure,
+            // shown under the source's name a line above — never added to ours,
+            // because two devices' calorie models summed is a number neither of
+            // them would stand behind.
+            (timeLabel, hms(w.duration), null),
+            if (w.distanceM != null && w.distanceM! > 0)
+              (
+                loc?.workoutDistanceStatLabel ?? 'Distance',
                 units.distanceValue(w.distanceM!).toStringAsFixed(2),
-                units.distanceUnit),
-          if (w.calories != null)
-            (caloriesLabel, grouped(w.calories!), 'kcal'),
-        ]
-      : [
-          (timeLabel, hms(w.duration), null),
-          if (w.calories == null)
-            (caloriesLabel, loc?.workoutNotCostedValue ?? 'Not costed', null)
-          else
-            (caloriesLabel, grouped(w.calories!), 'kcal'),
-          if (w.maxHr == null)
-            (loc?.workoutMaxHrStatLabel ?? 'Max HR',
-                loc?.workoutNoReadingValue ?? 'No reading', null)
-          else
-            (loc?.workoutMaxHrStatLabel ?? 'Max HR', '${w.maxHr}', 'bpm'),
-        ];
+                units.distanceUnit,
+              ),
+            if (w.calories != null)
+              (caloriesLabel, grouped(w.calories!), 'kcal'),
+          ]
+        : [
+            (timeLabel, hms(w.duration), null),
+            if (w.calories == null)
+              (caloriesLabel, loc?.workoutNotCostedValue ?? 'Not costed', null)
+            else
+              (caloriesLabel, grouped(w.calories!), 'kcal'),
+            if (w.maxHr == null)
+              (
+                loc?.workoutMaxHrStatLabel ?? 'Max HR',
+                loc?.workoutNoReadingValue ?? 'No reading',
+                null,
+              )
+            else
+              (loc?.workoutMaxHrStatLabel ?? 'Max HR', '${w.maxHr}', 'bpm'),
+          ];
   }
 }
 
@@ -1158,10 +1582,13 @@ String _weekdayLetter(BuildContext c, DateTime d) {
 /// spring-forward is 23 h long, and `inDays` floors that into the neighbouring
 /// slot.
 int? _daySlot(DateTime at, DateTime end) {
-  final slot = 6 -
-      DateTime.utc(end.year, end.month, end.day)
-          .difference(DateTime.utc(at.year, at.month, at.day))
-          .inDays;
+  final slot =
+      6 -
+      DateTime.utc(
+        end.year,
+        end.month,
+        end.day,
+      ).difference(DateTime.utc(at.year, at.month, at.day)).inDays;
   return slot < 0 || slot > 6 ? null : slot;
 }
 
@@ -1178,15 +1605,19 @@ List<double?> lastSevenDays(Object? points, DateTime end) {
   for (final e in points) {
     if (e is! Map || e['v'] is! num || e['t'] is! num) continue;
     // `t` is noon local on the day the value belongs to.
-    final at =
-        DateTime.fromMillisecondsSinceEpoch((e['t'] as num).toInt() * 1000);
+    final at = DateTime.fromMillisecondsSinceEpoch(
+      (e['t'] as num).toInt() * 1000,
+    );
     // CALENDAR days, not elapsed hours: the day after a spring-forward is 23 h
     // long, `inDays` floored that to 0, and Sunday landed in Monday's slot
     // where Monday overwrote it. UTC midnights have no DST to floor.
-    final slot = 6 -
-        DateTime.utc(end.year, end.month, end.day)
-            .difference(DateTime.utc(at.year, at.month, at.day))
-            .inDays;
+    final slot =
+        6 -
+        DateTime.utc(
+          end.year,
+          end.month,
+          end.day,
+        ).difference(DateTime.utc(at.year, at.month, at.day)).inDays;
     if (slot < 0 || slot > 6) continue;
     out[slot] = (e['v'] as num).toDouble();
   }
@@ -1203,8 +1634,10 @@ List<double?> lastSevenDays(Object? points, DateTime end) {
 /// [history] is the user's own previous/best per lift. Absent is honest — the
 /// live screen says "First time on this lift" — so the resume path passes what
 /// it has rather than blocking on a query.
-ActivityHost activityHost(AppState app,
-    {Map<String, SetHistory> history = const {}}) {
+ActivityHost activityHost(
+  AppState app, {
+  Map<String, SetHistory> history = const {},
+}) {
   // The id of the session this host opened, remembered across calls.
   //
   // `stopWorkout` clears `activeWorkout`, so a RETRY after a failed write —
@@ -1311,8 +1744,8 @@ List<Map<String, Object?>> _setRows(List<LoggedSet> sets) {
     for (final s in sets)
       {
         'exercise_key': s.exerciseKey,
-        'set_index':
-            perExercise[s.exerciseKey] = (perExercise[s.exerciseKey] ?? 0) + 1,
+        'set_index': perExercise[s.exerciseKey] =
+            (perExercise[s.exerciseKey] ?? 0) + 1,
         'reps': s.reps,
         'load_kg': s.loadKg,
         'rpe': s.rpe,
@@ -1342,7 +1775,10 @@ Future<void> _bankSets(AppState app, List<LoggedSet> sets) async {
 /// [id] is passed rather than read here so a retry still has one — see
 /// [activityHost].
 Future<ActivityResult> _finishSession(
-    AppState app, ActivityResult draft, String? id) async {
+  AppState app,
+  ActivityResult draft,
+  String? id,
+) async {
   // Idempotent: on a retry the session is already stopped and this is a no-op.
   await app.stopWorkout();
   if (id == null) return draft;
@@ -1502,7 +1938,9 @@ List<double?> _denseMinutes(Object? hr, [Duration? session]) {
   if (n < 1 || n > 24 * 60) return [for (final p in pts) p.$2];
   final want = session == null ? n : session.inMinutes + 1;
   final out = List<double?>.filled(
-      want > n && want <= 24 * 60 ? want : n, null);
+    want > n && want <= 24 * 60 ? want : n,
+    null,
+  );
   for (final p in pts) {
     final i = (p.$1 - t0) ~/ 60;
     if (i >= 0 && i < n) out[i] = p.$2;
@@ -1524,9 +1962,9 @@ Map<String, dynamic>? _topBand(Object? bands) {
 /// once here so a non-`List` value (or a non-numeric entry) never throws in
 /// either read path.
 List<double> _decodeZoneMinutes(Object? raw) => [
-      for (final z in (raw is List ? raw : const []))
-        if (z is num) z.toDouble(),
-    ];
+  for (final z in (raw is List ? raw : const []))
+    if (z is num) z.toDouble(),
+];
 
 /// One past session, opened from history — built from what the stores hold
 /// rather than from the six columns the list row carries.
@@ -1577,8 +2015,9 @@ Future<ActivityResult> _detailOf(AppState app, _PastWorkout w) async {
       // best-effort for the WHOLE enrichment — one bad band field must not
       // also blank the hr/avgHr/zoneMinutes reads beside it. `is`-checks
       // degrade to null instead of throwing.
-      zoneSource:
-          rebinned && band?['source'] is String ? band!['source'] as String : null,
+      zoneSource: rebinned && band?['source'] is String
+          ? band!['source'] as String
+          : null,
       zoneMaxHr: rebinned && band?['hi'] is num ? band!['hi'] as num : null,
       // …and the MINUTES from the same read, not from the list row. Opening a
       // session rescores it (`_rescoreSessionFromSubstrate`), so the row loaded
@@ -1622,17 +2061,18 @@ Future<ActivityResult> _detailOf(AppState app, _PastWorkout w) async {
 /// `strength_set` rows → the log the summary renders. `load_kg` stays null
 /// when it was null: a bodyweight set is not a zero-kilo set.
 StrengthLog _logFrom(List<Map<String, Object?>> rows) => StrengthLog([
-      for (final r in rows)
-        LoggedSet(
-          (r['exercise_key'] as String?) ?? '',
-          (r['reps'] as num?)?.toInt() ?? 0,
-          loadKg: (r['load_kg'] as num?)?.toDouble(),
-          rpe: (r['rpe'] as num?)?.toInt(),
-          restSec: (r['rest_sec'] as num?)?.toInt(),
-          at: DateTime.fromMillisecondsSinceEpoch(
-              ((r['at_ts'] as num?)?.toInt() ?? 0) * 1000),
-        ),
-    ]);
+  for (final r in rows)
+    LoggedSet(
+      (r['exercise_key'] as String?) ?? '',
+      (r['reps'] as num?)?.toInt() ?? 0,
+      loadKg: (r['load_kg'] as num?)?.toDouble(),
+      rpe: (r['rpe'] as num?)?.toInt(),
+      restSec: (r['rest_sec'] as num?)?.toInt(),
+      at: DateTime.fromMillisecondsSinceEpoch(
+        ((r['at_ts'] as num?)?.toInt() ?? 0) * 1000,
+      ),
+    ),
+]);
 
 // ── the data this screen reads ─────────────────────────────────────────────
 
@@ -1672,7 +2112,12 @@ class MorningEffect {
   final double delta;
   final bool exceedsMdc;
   const MorningEffect(
-      this.type, this.metric, this.n, this.delta, this.exceedsMdc);
+    this.type,
+    this.metric,
+    this.n,
+    this.delta,
+    this.exceedsMdc,
+  );
 }
 
 /// TS-12 — read ONLY the conjunction the analytics already decided.
@@ -1771,19 +2216,26 @@ class _PastWorkout {
   /// session's distance is read on open with its route.
   final double? distanceM;
 
-  const _PastWorkout(this.id, this.activity, this.start, this.duration,
-      {this.strain,
-      this.calories,
-      this.avgHr,
-      this.maxHr,
-      this.hrr60,
-      this.vo2max,
-      this.steps,
-      this.zoneMinutes = const [],
-      this.private = false,
-      this.importedFrom,
-      this.importedTitle,
-      this.distanceM});
+  const _PastWorkout(
+    this.id,
+    this.activity,
+    this.start,
+    this.duration, {
+    this.strain,
+    this.calories,
+    this.avgHr,
+    this.maxHr,
+    this.hrr60,
+    this.vo2max,
+    this.steps,
+    this.zoneMinutes = const [],
+    this.private = false,
+    this.importedFrom,
+    this.importedTitle,
+    this.distanceM,
+  });
+
+  String get title => importedTitle ?? activity.name;
 
   List<double> get zoneFractions {
     final total = zoneMinutes.fold<double>(0, (a, b) => a + b);
@@ -1791,42 +2243,24 @@ class _PastWorkout {
     return [for (final z in zoneMinutes) z / total];
   }
 
-  String when(AppLocalizations? loc) {
-    final days = calendarDaysBetween(start, DateTime.now());
-    final names = [
-      loc?.workoutWeekdayAbbrMon ?? 'Mon',
-      loc?.workoutWeekdayAbbrTue ?? 'Tue',
-      loc?.workoutWeekdayAbbrWed ?? 'Wed',
-      loc?.workoutWeekdayAbbrThu ?? 'Thu',
-      loc?.workoutWeekdayAbbrFri ?? 'Fri',
-      loc?.workoutWeekdayAbbrSat ?? 'Sat',
-      loc?.workoutWeekdayAbbrSun ?? 'Sun',
-    ];
-    final t = formatClockOf(start);
-    if (days == 0) return loc?.workoutWhenToday(t) ?? 'Today, $t';
-    if (days == 1) return loc?.workoutWhenYesterday(t) ?? 'Yesterday, $t';
-    if (days < 7) return '${names[start.weekday - 1]}, $t';
-    return '${start.day}/${start.month}, $t';
-  }
-
   ActivityResult toResult() => ActivityResult(
-        activity,
-        start: start,
-        duration: duration,
-        private: private,
-        // TS-09 — the id travels so the summary can write a rating against
-        // it; the rating itself is read on open by `_detailOf`, not carried on
-        // this row (the list does not show it).
-        sessionId: id,
-        strain: strain,
-        calories: calories,
-        avgHr: avgHr,
-        maxHr: maxHr,
-        hrr60: hrr60,
-        vo2max: vo2max,
-        steps: steps,
-        zoneMinutes: zoneMinutes,
-      );
+    activity,
+    start: start,
+    duration: duration,
+    private: private,
+    // TS-09 — the id travels so the summary can write a rating against
+    // it; the rating itself is read on open by `_detailOf`, not carried on
+    // this row (the list does not show it).
+    sessionId: id,
+    strain: strain,
+    calories: calories,
+    avgHr: avgHr,
+    maxHr: maxHr,
+    hrr60: hrr60,
+    vo2max: vo2max,
+    steps: steps,
+    zoneMinutes: zoneMinutes,
+  );
 }
 
 class _WorkoutData {
@@ -1915,233 +2349,332 @@ class _WorkoutData {
   const _WorkoutData.empty() : this();
 }
 
+/// Calendar bounds for History. The end is the next local midnight, never
+/// today + 86400 seconds, so a date range covers DST days in full.
+({DateTime? from, DateTime until}) workoutHistoryWindow(
+  String range,
+  DateTime now,
+) {
+  final local = now.toLocal();
+  final until = DateTime(local.year, local.month, local.day + 1);
+  final months = switch (range) {
+    '3m' => 3,
+    'year' => 12,
+    _ => 1,
+  };
+  final month = DateTime(local.year, local.month - months);
+  final lastDay = DateTime(month.year, month.month + 1, 0).day;
+  return (
+    from: range == 'all'
+        ? null
+        : DateTime(month.year, month.month, math.min(local.day, lastDay)),
+    until: until,
+  );
+}
+
+class _WorkoutHistory {
+  final List<_PastWorkout> workouts;
+  final bool failed;
+  const _WorkoutHistory(this.workouts, {this.failed = false});
+}
+
+Future<_WorkoutHistory> _loadWorkoutHistory(
+  AppState app,
+  ({DateTime? from, DateTime until}) window,
+) async {
+  final fromTs = window.from?.millisecondsSinceEpoch == null
+      ? 0
+      : window.from!.millisecondsSinceEpoch ~/ 1000;
+  final untilTs = window.until.millisecondsSinceEpoch ~/ 1000;
+  final workouts = <_PastWorkout>[];
+  var failed = false;
+  Future<void> recorded() async {
+    try {
+      final repo = app.repo;
+      if (repo == null) throw StateError('Workout repository is unavailable');
+      final rows = (await repo.getWorkoutHistory(
+        fromTs: fromTs,
+        untilTs: untilTs,
+      ))['workouts'];
+      if (rows is! List) {
+        throw const FormatException('Workout rows are missing');
+      }
+      for (final row in rows) {
+        if (row is! Map) continue;
+        final workout = _recordedWorkout(row);
+        if (workout != null) workouts.add(workout);
+      }
+    } catch (_) {
+      failed = true;
+    }
+  }
+
+  Future<void> imported() async {
+    try {
+      for (final row in await LocalDb.importedWorkouts(
+        limit: null,
+        sinceTs: fromTs,
+        untilTs: untilTs,
+      )) {
+        final workout = _importedWorkout(row);
+        if (workout != null) workouts.add(workout);
+      }
+    } catch (_) {
+      failed = true;
+    }
+  }
+
+  await Future.wait([recorded(), imported()]);
+  workouts.sort((a, b) => b.start.compareTo(a.start));
+  return _WorkoutHistory(workouts, failed: failed);
+}
+
+// The overview and complete History use the same row mapping. A wider history
+// read changes which stored sessions are visible, never their measurements.
+_PastWorkout? _recordedWorkout(Map row) {
+  final ts = (row['start_ts'] as num?)?.toInt();
+  if (ts == null) return null;
+  final activity =
+      activityByName(row['type'] as String?) ??
+      const Activity(
+        'Workout',
+        LucideIcons.activity,
+        C.purple,
+        Track.duration,
+        5.0,
+      );
+  return _PastWorkout(
+    (row['id'] as String?) ?? '',
+    activity,
+    DateTime.fromMillisecondsSinceEpoch(ts * 1000),
+    Motion.tick * 60 * ((row['duration_min'] as num?)?.toInt() ?? 0),
+    strain: (row['strain'] as num?)?.toDouble(),
+    calories: (row['calories'] as num?)?.round(),
+    avgHr: (row['avg_hr'] as num?)?.round(),
+    maxHr: (row['max_hr'] as num?)?.toInt(),
+    hrr60: (row['hrr60'] as num?)?.round(),
+    vo2max: (row['vo2max_estimate'] as num?)?.toDouble(),
+    steps: (row['steps'] as num?)?.toInt(),
+    zoneMinutes: _decodeZoneMinutes(row['zone_min']),
+    private: row['private'] == true,
+  );
+}
+
+_PastWorkout? _importedWorkout(Map row) {
+  final ts = (row['start_ts'] as num?)?.toInt();
+  final endTs = (row['end_ts'] as num?)?.toInt();
+  final source = (row['source'] as String?)?.trim();
+  if (ts == null ||
+      endTs == null ||
+      endTs <= ts ||
+      source == null ||
+      source.isEmpty) {
+    return null;
+  }
+  final title = importedWorkoutTitle(row['kind']);
+  return _PastWorkout(
+    (row['uuid'] as String?) ?? '',
+    activityByName(title) ??
+        const Activity(
+          'Workout',
+          LucideIcons.activity,
+          C.purple,
+          Track.duration,
+          5.0,
+        ),
+    DateTime.fromMillisecondsSinceEpoch(ts * 1000),
+    Motion.tick * (endTs - ts),
+    // Imported sessions carry only the recording app's values; no strain.
+    calories: (row['energy_kcal'] as num?)?.round(),
+    steps: (row['steps'] as num?)?.toInt(),
+    importedFrom: source,
+    importedTitle: title,
+    distanceM: (row['distance_m'] as num?)?.toDouble(),
+  );
+}
+
 /// One pass over the repo. Every call is defensive: this screen must render on
 /// a device that has never synced, and a throw in any one of them must not
 /// take the whole tab down.
 Future<_WorkoutData> _loadWorkoutData(AppState app) async {
-    final repo = app.repo;
-    if (repo == null) return const _WorkoutData.empty();
+  final repo = app.repo;
+  if (repo == null) return const _WorkoutData.empty();
 
-    double? weight;
-    try {
-      weight = (await repo.getProfile())['weight_kg'] as double?;
-    } catch (_) {
-      weight = null;
+  double? weight;
+  try {
+    weight = (await repo.getProfile())['weight_kg'] as double?;
+  } catch (_) {
+    weight = null;
+  }
+
+  // ONE crossday read for the three blocks that come out of it: `load`
+  // (CTL/ATL/TSB), `overreaching` (TS-12) and `session_cost` (TS-11). The
+  // repo already gates it for staleness and returns `{stale: …}` instead of
+  // the artifact, in which case every key below is simply absent.
+  Map<String, dynamic> insights = const {};
+  try {
+    insights = await repo.getInsights();
+  } catch (_) {
+    insights = const {};
+  }
+
+  _Load? load;
+  String? note;
+  final raw = insights['load'];
+  if (raw is Map) {
+    note = raw['note'] as String?;
+    final v = raw['value'];
+    if (v is Map && v['ctl'] is num) {
+      load = _Load(
+        (v['ctl'] as num).toDouble(),
+        (v['atl'] as num?)?.toDouble(),
+        (v['tsb'] as num?)?.toDouble(),
+      );
     }
+  }
 
-    // ONE crossday read for the three blocks that come out of it: `load`
-    // (CTL/ATL/TSB), `overreaching` (TS-12) and `session_cost` (TS-11). The
-    // repo already gates it for staleness and returns `{stale: …}` instead of
-    // the artifact, in which case every key below is simply absent.
-    Map<String, dynamic> insights = const {};
-    try {
-      insights = await repo.getInsights();
-    } catch (_) {
-      insights = const {};
-    }
+  final overreach = overreachFrom(insights);
+  final morningAfter = morningEffectsFrom(insights);
 
-    _Load? load;
-    String? note;
-    final raw = insights['load'];
-    if (raw is Map) {
-      note = needMessageFromNote(raw['note'] as String?, unit: 'days');
-      final v = raw['value'];
-      if (v is Map && v['ctl'] is num) {
-        load = _Load(
-          (v['ctl'] as num).toDouble(),
-          (v['atl'] as num?)?.toDouble(),
-          (v['tsb'] as num?)?.toDouble(),
-        );
+  // One slot per calendar day for the last seven, ending today. A day that
+  // derived nothing is a hole, not a shifted neighbour: taking the last
+  // seven STORED points stamped `M T W T F S S` on whatever was there, and
+  // `metric_series` only gains a row on a day that derives — so after a sync
+  // gap the letters named days the data did not come from, and the bar drawn
+  // as "today" could be a week old.
+  final now = DateTime.now();
+  final end = DateTime(now.year, now.month, now.day);
+  var trimp = List<double?>.filled(7, null);
+  try {
+    trimp = lastSevenDays((await repo.getChart('trimp'))['points'], end);
+  } catch (_) {
+    trimp = List<double?>.filled(7, null);
+  }
+
+  final past = <_PastWorkout>[];
+  try {
+    final rows = (await repo.getWorkouts(range: 'month'))['workouts'];
+    if (rows is List) {
+      for (final r in rows) {
+        if (r is! Map) continue;
+        final workout = _recordedWorkout(r);
+        if (workout != null) past.add(workout);
       }
     }
-
-    final overreach = overreachFrom(insights);
-    final morningAfter = morningEffectsFrom(insights);
-
-    // One slot per calendar day for the last seven, ending today. A day that
-    // derived nothing is a hole, not a shifted neighbour: taking the last
-    // seven STORED points stamped `M T W T F S S` on whatever was there, and
-    // `metric_series` only gains a row on a day that derives — so after a sync
-    // gap the letters named days the data did not come from, and the bar drawn
-    // as "today" could be a week old.
-    final now = DateTime.now();
-    final end = DateTime(now.year, now.month, now.day);
-    var trimp = List<double?>.filled(7, null);
-    try {
-      trimp = lastSevenDays((await repo.getChart('trimp'))['points'], end);
-    } catch (_) {
-      trimp = List<double?>.filled(7, null);
-    }
-
-    final past = <_PastWorkout>[];
-    try {
-      final rows = (await repo.getWorkouts(range: 'month'))['workouts'];
-      if (rows is List) {
-        for (final r in rows) {
-          if (r is! Map) continue;
-          final ts = (r['start_ts'] as num?)?.toInt();
-          if (ts == null) continue;
-          final a = activityByName(r['type'] as String?) ??
-              const Activity('Workout', LucideIcons.activity, C.purple,
-                  Track.duration, 5.0);
-          past.add(_PastWorkout(
-            (r['id'] as String?) ?? '',
-            a,
-            DateTime.fromMillisecondsSinceEpoch(ts * 1000),
-            // duration_min is minutes; Motion.tick × 60 × n keeps the one
-            // Duration literal in theme.dart.
-            Motion.tick * 60 * ((r['duration_min'] as num?)?.toInt() ?? 0),
-            strain: (r['strain'] as num?)?.toDouble(),
-            calories: (r['calories'] as num?)?.round(),
-            // The session's mean over its own HR stream, computed by the repo
-            // — not the last sample anybody happened to see.
-            avgHr: (r['avg_hr'] as num?)?.round(),
-            maxHr: (r['max_hr'] as num?)?.toInt(),
-            hrr60: (r['hrr60'] as num?)?.round(),
-            vo2max: (r['vo2max_estimate'] as num?)?.toDouble(),
-            steps: (r['steps'] as num?)?.toInt(),
-            zoneMinutes: _decodeZoneMinutes(r['zone_min']),
-            private: r['private'] == true,
-          ));
-        }
+  } catch (_) {
+    // leave `past` as-is
+  }
+  // Workouts another app recorded, on the SAME window the band's own list
+  // uses. The store is read 90 days back (30 on Android) because that is the
+  // most history worth carrying, but showing three months of imports beside
+  // one month of sessions would read as a band that stopped measuring.
+  try {
+    final since = end.subtract(Motion.tick * 86400 * 31);
+    for (final r in await LocalDb.importedWorkouts(limit: 200)) {
+      final workout = _importedWorkout(r);
+      if (workout != null && !workout.start.isBefore(since)) {
+        past.add(workout);
       }
-    } catch (_) {
-      // leave `past` as-is
     }
-    // Workouts another app recorded, on the SAME window the band's own list
-    // uses. The store is read 90 days back (30 on Android) because that is the
-    // most history worth carrying, but showing three months of imports beside
-    // one month of sessions would read as a band that stopped measuring.
-    try {
-      final since = end.subtract(Motion.tick * 86400 * 31);
-      for (final r in await LocalDb.importedWorkouts(limit: 200)) {
-        final ts = (r['start_ts'] as num?)?.toInt();
-        final endTs = (r['end_ts'] as num?)?.toInt();
-        final src = (r['source'] as String?)?.trim();
-        // `source` is NOT NULL in the table for exactly this reason: a workout
-        // shown without the app that recorded it is a workout this app is
-        // implicitly claiming. No source, no row.
-        if (ts == null || endTs == null || endTs <= ts) continue;
-        if (src == null || src.isEmpty) continue;
-        final at = DateTime.fromMillisecondsSinceEpoch(ts * 1000);
-        if (at.isBefore(since)) continue;
-        final title = importedWorkoutTitle(r['kind']);
-        past.add(_PastWorkout(
-          (r['uuid'] as String?) ?? '',
-          // The icon and colour only, when the catalogue happens to know the
-          // type. The NAME always comes from the store — `activityByName`
-          // resolves the ~40 types this app can start, and the fallback would
-          // print "Workout" over a surf.
-          activityByName(title) ??
-              const Activity('Workout', LucideIcons.activity, C.purple,
-                  Track.duration, 5.0),
-          at,
-          Motion.tick * (endTs - ts),
-          // No strain, ever. It is not omitted pending a better idea — there
-          // is no heart-rate series behind this row to score one from, so
-          // every load surface reads null and leaves it out on its own.
-          calories: (r['energy_kcal'] as num?)?.round(),
-          steps: (r['steps'] as num?)?.toInt(),
-          importedFrom: src,
-          importedTitle: title,
-          distanceM: (r['distance_m'] as num?)?.toDouble(),
-        ));
-      }
-    } catch (_) {
-      // Nothing imported is the normal state, and an unreadable table must not
-      // take the band's own history down with it.
-    }
+  } catch (_) {
+    // Nothing imported is the normal state, and an unreadable table must not
+    // take the band's own history down with it.
+  }
 
-    past.sort((a, b) => b.start.compareTo(a.start));
+  past.sort((a, b) => b.start.compareTo(a.start));
 
-    // TS-08 — mechanical load, on the same seven slots the TRIMP chart uses.
-    // One indexed read per session in the window, in parallel, and only for the
-    // window: `strength_set` has no per-week aggregate and this is a handful of
-    // rows either way.
-    // ponytail: N queries per screen load. If a lifter with a session every day
-    // ever feels it, the fix is a SUM(reps*load_kg) GROUP BY in LocalDb, not a
-    // cache here.
-    final tonnage7 = List<double?>.filled(7, null);
-    var tonnagePartial = false;
-    final tonnageJobs = <Future<void>>[];
-    for (final w in past) {
-      final slot = _daySlot(w.start, end);
-      if (slot == null || w.id.isEmpty || w.importedFrom != null) continue;
-      tonnageJobs.add(LocalDb.strengthSets(w.id).then((rows) {
+  // TS-08 — mechanical load, on the same seven slots the TRIMP chart uses.
+  // One indexed read per session in the window, in parallel, and only for the
+  // window: `strength_set` has no per-week aggregate and this is a handful of
+  // rows either way.
+  // ponytail: N queries per screen load. If a lifter with a session every day
+  // ever feels it, the fix is a SUM(reps*load_kg) GROUP BY in LocalDb, not a
+  // cache here.
+  final tonnage7 = List<double?>.filled(7, null);
+  var tonnagePartial = false;
+  final tonnageJobs = <Future<void>>[];
+  for (final w in past) {
+    final slot = _daySlot(w.start, end);
+    if (slot == null || w.id.isEmpty || w.importedFrom != null) continue;
+    tonnageJobs.add(
+      LocalDb.strengthSets(w.id).then((rows) {
         if (rows.isEmpty) return;
         final log = _logFrom(rows);
         if (log.hasUnloadedSets) tonnagePartial = true;
         final v = log.volumeKg;
         if (v == null) return; // bodyweight-only session: no kilos to add
         tonnage7[slot] = (tonnage7[slot] ?? 0) + v;
-      }));
-    }
-    try {
-      await Future.wait(tonnageJobs);
-    } catch (_) {
-      // Nobody lifting is the normal case; a partial sum is still honest.
-    }
-
-    final weekStart = DateTime(end.year, end.month, end.day - (end.weekday - 1));
-    final thisWeek = [for (final w in past) if (!w.start.isBefore(weekStart)) w];
-
-    int? tracked;
-    try {
-      tracked = ((await repo.getRecords())['workouts_tracked'] as num?)
-          ?.toInt();
-    } catch (_) {
-      tracked = null;
-    }
-
-    // Imported sessions fall out here on their own: they carry no strain,
-    // because there is no heart-rate series behind them to score one from.
-    // Nothing filters them — there is nothing to add.
-    final weekLoad = thisWeek
-        .where((w) => w.strain != null)
-        .fold<double?>(null, (a, w) => (a ?? 0) + w.strain!);
-
-    // Real recency, deduped, newest first — six tiles like the constant it
-    // replaces, so the picker's row is the same shape either way.
-    //
-    // Band sessions only. These tiles START a session, and most imported types
-    // land on the generic fallback activity — a row of "Workout" tiles that
-    // begin a five-MET nothing is worse than the six real ones.
-    final recent = <Activity>[];
-    for (final w in past) {
-      if (w.importedFrom != null) continue;
-      if (!recent.any((x) => x.name == w.activity.name)) {
-        recent.add(w.activity);
-      }
-      if (recent.length == 6) break;
-    }
-
-    // The live screen has to have previous/best in hand before the first set;
-    // "First time on this lift" was showing forever because nothing loaded
-    // them.
-    final history = await loadSetHistory();
-
-    return _WorkoutData(
-      weightKg: weight,
-      load: load,
-      loadNote: note,
-      trimp7: trimp,
-      trimpEnd: end,
-      tonnage7: tonnage7,
-      tonnagePartial: tonnagePartial,
-      workouts: past,
-      // Imported days light a dot too. This strip says "you trained", not
-      // "this band measured you", and a Sunday run left dark because the watch
-      // recorded it instead of the band is wrong in a way the user can see.
-      weekDays: {for (final w in thisWeek) w.start.weekday - 1},
-      weekCount: thisWeek.length,
-      weekImported: thisWeek.where((w) => w.importedFrom != null).length,
-      weekLoad: weekLoad,
-      workoutsTracked: tracked,
-      recent: recent,
-      setHistory: history,
-      overreach: overreach,
-      morningAfter: morningAfter,
-      suggestions: await activeSuggestions(),
-      importedLast: await lastImportAt(HealthImport.workouts),
+      }),
     );
+  }
+  try {
+    await Future.wait(tonnageJobs);
+  } catch (_) {
+    // Nobody lifting is the normal case; a partial sum is still honest.
+  }
+
+  final weekStart = DateTime(end.year, end.month, end.day - (end.weekday - 1));
+  final thisWeek = [
+    for (final w in past)
+      if (!w.start.isBefore(weekStart)) w,
+  ];
+
+  int? tracked;
+  try {
+    tracked = ((await repo.getRecords())['workouts_tracked'] as num?)?.toInt();
+  } catch (_) {
+    tracked = null;
+  }
+
+  // Imported sessions fall out here on their own: they carry no strain,
+  // because there is no heart-rate series behind them to score one from.
+  // Nothing filters them — there is nothing to add.
+  final weekLoad = thisWeek
+      .where((w) => w.strain != null)
+      .fold<double?>(null, (a, w) => (a ?? 0) + w.strain!);
+
+  // Real recency, deduped, newest first — six tiles like the constant it
+  // replaces, so the picker's row is the same shape either way.
+  //
+  // Band sessions only. These tiles START a session, and most imported types
+  // land on the generic fallback activity — a row of "Workout" tiles that
+  // begin a five-MET nothing is worse than the six real ones.
+  final recent = <Activity>[];
+  for (final w in past) {
+    if (w.importedFrom != null) continue;
+    if (!recent.any((x) => x.name == w.activity.name)) {
+      recent.add(w.activity);
+    }
+    if (recent.length == 6) break;
+  }
+
+  // The live screen has to have previous/best in hand before the first set;
+  // "First time on this lift" was showing forever because nothing loaded
+  // them.
+  final history = await loadSetHistory();
+
+  return _WorkoutData(
+    weightKg: weight,
+    load: load,
+    loadNote: note,
+    trimp7: trimp,
+    trimpEnd: end,
+    tonnage7: tonnage7,
+    tonnagePartial: tonnagePartial,
+    workouts: past,
+    // Imported days light a dot too. This strip says "you trained", not
+    // "this band measured you", and a Sunday run left dark because the watch
+    // recorded it instead of the band is wrong in a way the user can see.
+    weekDays: {for (final w in thisWeek) w.start.weekday - 1},
+    weekCount: thisWeek.length,
+    weekImported: thisWeek.where((w) => w.importedFrom != null).length,
+    weekLoad: weekLoad,
+    workoutsTracked: tracked,
+    recent: recent,
+    setHistory: history,
+    overreach: overreach,
+    morningAfter: morningAfter,
+    suggestions: await activeSuggestions(),
+    importedLast: await lastImportAt(HealthImport.workouts),
+  );
 }

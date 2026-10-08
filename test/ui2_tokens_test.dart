@@ -195,6 +195,12 @@ void main() {
 const _notComponents = {
   // shell and routing
   'AppShell', 'Domain', 'GalleryScreen',
+  // A route boundary owns a captured frame and Navigator lifecycle. Its
+  // forward/reverse behavior is covered by ui2_detail_transition_test.
+  'DetailLink',
+  // Paging owns controllers and retained page state; exercised in
+  // ui2_sub_pages_test and the domain swipe regressions.
+  'SubPages',
   // WHOOP MG ECG routes: the Heart Screener entry reads the database and
   // pushes; the capture screen owns a live BLE reading (a gallery case would
   // start one); the detail screen reads and deletes a reading and routes to
@@ -208,6 +214,9 @@ const _notComponents = {
   'ProfileSetupScreen', 'ProfileSetupView',
   // profile routes
   'ProfileHome', 'ProfileHomeView', 'MoreSettings', 'MoreSettingsView',
+  // The routed appearance sheet is exercised at full phone widths in
+  // ui2_interface_style_settings_test, including large text and failed saves.
+  'InterfaceStylePicker',
   'NotificationSettings', 'NotificationSettingsView', 'EditProfile',
   'EditProfileView', 'DataScreen', 'AlarmScreen', 'AlarmScreenView',
   'MyDevices', 'MyDevicesView', 'DeviceDetail', 'DeviceDetailView', 'RePair',
@@ -260,7 +269,7 @@ const _notComponents = {
   // tabs and drill-downs
   'HomeScreen', 'HealthScreen', 'WorkoutScreen', 'NutritionScreen',
   'WellnessScreen', 'CycleTab', 'MetricDetail', 'ReadinessDetail',
-  'SleepDetail', 'CircadianDetail', 'DayStrainDetail', 'DayStepsDetail',
+  'SleepDetail', 'CircadianDetail', 'CircadianTab', 'DayStrainDetail', 'DayStepsDetail',
   'ZonesDetail',
   // Reads the day bundle AND the raw beat store to draw one night's Poincaré
   // cloud — a gallery case would have to mock 27 000 beat intervals.
@@ -274,7 +283,22 @@ const _notComponents = {
   // The coach chat and its BYOK setup: Scaffold routes that own an engine, a
   // 120 s network call and the keychain. `CoachFigure` — the part a gallery can
   // actually hold — IS in it.
+  // Shell overlay owns a retained Coach engine and route/focus lifecycle.
+  // Covered by coach_panel_test at phone widths, not by a gallery fixture.
+  'CoachHost',
+  // Database and Android permission controllers; fixture/permission coverage
+  // lives in the weight tests rather than granting access in the gallery.
+  'WeightTrendScreen',
+  'WeightExploreRow',
+  'WeightImportSettings',
   'CoachScreen', 'CoachSetup', 'AiBriefingScreen',
+  // Scaffold routes own database-backed preferences, editors and Save/Cancel
+  // lifecycle. Phone-width coverage lives in coach_personalization_test.
+  'CoachPersonalization', 'CoachCustomInstructions',
+  // Coach's full-width panel headers include routing/resize controls. Render
+  // them in the retained panel at phone widths (coach_panel_test and
+  // coach_personalization_test), rather than a narrow gallery cell.
+  'CoachSurfaceHeader', 'CoachPageTitle',
   // The two day-scoped Scaffold routes: each resolves a day, then reads the
   // bundle plus three or four stores to fill it. Their BODIES are what a
   // gallery can hold and both are in it as cases — `timeline_day`,

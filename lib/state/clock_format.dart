@@ -136,7 +136,7 @@ class ClockMaterialLocalizationsDelegate
 
   // ponytail: only the 24-hour-native languages the app ships; a new one
   // falls through to the stock delegate (24-hour dial) until listed here.
-  static const _langs = {'de', 'es', 'fr'};
+  static const _langs = {'de', 'es', 'fr', 'it'};
 
   @override
   bool isSupported(Locale locale) =>
@@ -150,6 +150,7 @@ class ClockMaterialLocalizationsDelegate
     final make = switch (n) {
       'de' => _De12.new,
       'es' => _Es12.new,
+      'it' => _It12.new,
       _ => _Fr12.new,
     };
     return SynchronousFuture(make(
@@ -178,3 +179,4 @@ mixin _TwelveHour on GlobalMaterialLocalizations {
 class _De12 = MaterialLocalizationDe with _TwelveHour;
 class _Es12 = MaterialLocalizationEs with _TwelveHour;
 class _Fr12 = MaterialLocalizationFr with _TwelveHour;
+class _It12 = MaterialLocalizationIt with _TwelveHour;

@@ -107,7 +107,7 @@ void main() {
     expect(client.closed, isTrue);
   });
 
-  test('two overlapping sends: the client stays open until BOTH finish',
+  test('two independent chats: the client stays open until BOTH finish',
       () async {
     // A plain "am I sending" bool would flip false when the FIRST of two
     // overlapping sends finishes, and a dispose requested in that window
@@ -126,6 +126,7 @@ void main() {
       confirm: (_) async => true,
     );
     await Future<void>.delayed(const Duration(milliseconds: 10));
+    engine.newSession();
     final second = engine.send(
       'again',
       onItem: (_) {},

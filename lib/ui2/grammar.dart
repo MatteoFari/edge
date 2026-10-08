@@ -30,15 +30,42 @@
 //     the five tabs of the shell.
 
 import 'dart:math' as math;
+import 'dart:ui' show SemanticsRole;
 
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/material.dart';
 import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../data/journal_fields.dart' show formatMinuteOfDay;
 import '../models/metric.dart';
+import '../l10n/app_localizations.dart';
 import 'charts.dart';
+import 'detail_transition.dart';
+import 'expressive_paint.dart';
 import 'scroll_hint.dart';
 import 'theme.dart';
+
+/// The uncontained expressive loader. Screens supply a gated phase; gallery
+/// fixtures can hold a shape still without starting an ambient animation.
+class ExpressiveLoadingIndicator extends StatelessWidget {
+  const ExpressiveLoadingIndicator({super.key, this.phase = 0, this.color = C.coach});
+  final double phase;
+  final Color color;
+
+  @override
+  Widget build(BuildContext c) => RepaintBoundary(
+    child: SizedBox.square(
+      dimension: S.x12,
+      child: CustomPaint(
+        painter: ExpressiveLoadingShape(
+          Motion.enabled(c) ? phase : 0,
+          P.of(c).on(color),
+          Motion.spatialCurve(c),
+        ),
+      ),
+    ),
+  );
+}
 
 /// ── PRESSABLE ── the only gesture primitive in lib/ui2 ────────────────────
 ///
@@ -106,12 +133,41 @@ class _PressableState extends State<Pressable> {
         onTapCancel: () => setState(() => _down = false),
         child: AnimatedScale(
           scale: _down ? .975 : 1,
-          duration: motion(c, Motion.fast),
+          duration: Motion.press(c),
+          curve: Motion.spatialCurve(c),
           child: out,
         ),
       ),
     );
   }
+}
+
+/// A panel header has arrow-button alternatives to its vertical drag. Keeping
+/// recognition here prevents chat scrolling from resizing the containing panel.
+class PanelHandle extends StatefulWidget {
+  final Widget child;
+  final VoidCallback onExpand, onCollapse;
+  const PanelHandle({super.key, required this.child,
+    required this.onExpand, required this.onCollapse});
+  @override
+  State<PanelHandle> createState() => _PanelHandleState();
+}
+
+class _PanelHandleState extends State<PanelHandle> {
+  double _drag = 0;
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    behavior: HitTestBehavior.opaque,
+    onVerticalDragStart: (_) => _drag = 0,
+    onVerticalDragUpdate: (event) => _drag += event.delta.dy,
+    onVerticalDragCancel: () => _drag = 0,
+    onVerticalDragEnd: (_) {
+      if (_drag <= -S.tap) widget.onExpand();
+      if (_drag >= S.tap) widget.onCollapse();
+      _drag = 0;
+    },
+    child: widget.child,
+  );
 }
 
 /// ── SCRUBBER ── the only continuous drag in lib/ui2 ───────────────────────
@@ -144,6 +200,10 @@ class Scrubber extends StatelessWidget {
   /// which is about a twenty-minute resolution on a night.
   final double step;
 
+  /// Opt in when the strip also pans: taps inspect, while a held gesture
+  /// scrubs without taking ordinary horizontal or vertical scroll gestures.
+  final bool longPressToScrub;
+
   final Widget child;
 
   const Scrubber({
@@ -154,6 +214,7 @@ class Scrubber extends StatelessWidget {
     required this.describe,
     required this.child,
     this.step = .05,
+    this.longPressToScrub = false,
   });
 
   @override
@@ -179,6 +240,15 @@ class Scrubber extends StatelessWidget {
           final w = box.maxWidth;
           void set(Offset o) =>
               onChanged(w <= 0 ? 0 : (o.dx / w).clamp(0.0, 1.0));
+          if (longPressToScrub) {
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onTapUp: (e) => set(e.localPosition),
+              onLongPressStart: (e) => set(e.localPosition),
+              onLongPressMoveUpdate: (e) => set(e.localPosition),
+              child: child,
+            );
+          }
           return Listener(
             // Opaque, like Pressable. A `Listener` defers to its child by
             // default, so the strip was only touchable where the painter
@@ -194,11 +264,56 @@ class Scrubber extends StatelessWidget {
   }
 }
 
+/// A catalogue search. The controller keeps the query through tab changes
+/// and detail return; its owner disposes it with the screen.
+class DomainSearchField extends StatelessWidget {
+  final TextEditingController controller;
+  final String label, hint, clearLabel;
+  final ValueChanged<String> onChanged;
+  final Color accent;
+  final bool autofocus;
+
+  const DomainSearchField({super.key, required this.controller,
+    required this.label, required this.hint, required this.onChanged,
+    this.clearLabel = 'Clear', this.accent = C.purple, this.autofocus = false});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    return Container(
+      constraints: const BoxConstraints(minHeight: S.tap),
+      padding: const EdgeInsets.symmetric(horizontal: S.x4),
+      decoration: BoxDecoration(color: p.card2, borderRadius: R.controlOf(c)),
+      child: Row(children: [
+        Icon(LucideIcons.search, size: 17, color: p.ink3),
+        const SizedBox(width: S.x2),
+        Expanded(child: Semantics(label: label, textField: true,
+          child: TextField(controller: controller, autofocus: autofocus,
+            onChanged: onChanged, style: F.body.copyWith(color: p.ink),
+            cursorColor: p.on(accent),
+            decoration: InputDecoration.collapsed(hintText: hint,
+                hintStyle: F.body.copyWith(color: p.ink3))),
+        )),
+        ValueListenableBuilder<TextEditingValue>(valueListenable: controller,
+          builder: (_, value, _) => value.text.isEmpty
+            ? const SizedBox.shrink()
+            : Pressable(semanticLabel: clearLabel, onTap: () {
+                controller.clear();
+                onChanged('');
+              }, child: Icon(LucideIcons.x, size: 17, color: p.ink3)),
+        ),
+      ]),
+    );
+  }
+}
+
 /// The base card surface. Elevation, not outline.
 class Surface extends StatelessWidget {
   final Widget child;
   final EdgeInsets pad;
   final VoidCallback? onTap;
+  final Widget? destination;
+  final Future<void> Function(DetailOpener)? onNavigate;
   final Color? color;
   final int elevation;
   final String? semanticLabel;
@@ -208,28 +323,43 @@ class Surface extends StatelessWidget {
     required this.child,
     this.pad = const EdgeInsets.all(S.x4),
     this.onTap,
+    this.destination,
+    this.onNavigate,
     this.color,
     this.elevation = 1,
     this.semanticLabel,
-  });
+  }) : assert(onTap == null || (destination == null && onNavigate == null)),
+       assert(destination == null || onNavigate == null);
 
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
-    return Pressable(
-      onTap: onTap,
+    Widget press(VoidCallback? tap) => Pressable(
+      onTap: tap,
       semanticLabel: semanticLabel,
       child: Container(
         width: double.infinity,
         padding: pad,
         decoration: BoxDecoration(
           color: color ?? p.card,
-          borderRadius: R.rLg,
+          borderRadius: R.cardOf(c),
           boxShadow: p.el(elevation),
         ),
         child: child,
       ),
     );
+    return destination == null && onNavigate == null
+        ? press(onTap)
+        : DetailLink(
+            color: color,
+            builder: (open) => press(() {
+              if (onNavigate != null) {
+                onNavigate!(open);
+              } else {
+                open<void>(destination!);
+              }
+            }),
+          );
   }
 }
 
@@ -309,6 +439,7 @@ class SignalCard extends StatelessWidget {
   final String label, value, unit, sub;
 
   final VoidCallback? onTap;
+  final Widget? destination;
 
   /// A small dial in the header row's slack — steps is the only caller today,
   /// showing progress toward its goal without a second card.
@@ -323,6 +454,7 @@ class SignalCard extends StatelessWidget {
     this.unit = '',
     this.sub = '',
     this.onTap,
+    this.destination,
     this.trailing,
   });
 
@@ -331,6 +463,7 @@ class SignalCard extends StatelessWidget {
     final p = P.of(c);
     return Surface(
       onTap: onTap,
+      destination: destination,
       semanticLabel: '$label, $value $unit'.trim(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -470,6 +603,21 @@ class _Bar extends StatelessWidget {
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
+    if (p.expressive) {
+      return Semantics(
+        role: SemanticsRole.progressBar,
+        minValue: '0',
+        maxValue: '100',
+        value: '${(frac.clamp(0.0, 1.0) * 100).round()}',
+        child: SizedBox(
+          height: S.x4,
+          child: CustomPaint(
+            size: Size.infinite,
+            painter: ExpressiveSleepMeter(frac, p.on(color), p.track),
+          ),
+        ),
+      );
+    }
     return ClipRRect(
       borderRadius: R.rPill,
       child: LinearProgressIndicator(
@@ -497,6 +645,7 @@ class TrendCard extends StatelessWidget {
   final List<double?> series;
   final Color color;
   final VoidCallback? onTap;
+  final Widget? destination;
 
   const TrendCard(
     this.label,
@@ -510,6 +659,7 @@ class TrendCard extends StatelessWidget {
     this.up = false,
     this.good = true,
     this.onTap,
+    this.destination,
   });
 
   @override
@@ -545,6 +695,7 @@ class TrendCard extends StatelessWidget {
     );
     return Surface(
       onTap: onTap,
+      destination: destination,
       semanticLabel:
           '$label, $value $unit, $delta $window${judgement.isEmpty ? '' : ', $judgement'}'
               .trim(),
@@ -631,6 +782,7 @@ class InsightCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback? onTap;
+  final Widget? destination;
 
   const InsightCard(
     this.headline,
@@ -640,6 +792,7 @@ class InsightCard extends StatelessWidget {
     this.icon = LucideIcons.sparkles,
     this.color = C.blue,
     this.onTap,
+    this.destination,
   });
 
   @override
@@ -648,6 +801,7 @@ class InsightCard extends StatelessWidget {
     final ink = p.on(color);
     return Surface(
       onTap: onTap,
+      destination: destination,
       color: p.wash(color, strength: .65),
       elevation: 0,
       semanticLabel: '$headline. $reason',
@@ -741,6 +895,8 @@ class ActionCard extends StatelessWidget {
   final IconData icon;
   final Color color;
   final VoidCallback? onTap;
+  final Widget? destination;
+  final Future<void> Function(DetailOpener)? onNavigate;
 
   const ActionCard(
     this.title,
@@ -750,6 +906,8 @@ class ActionCard extends StatelessWidget {
     this.color, {
     super.key,
     this.onTap,
+    this.destination,
+    this.onNavigate,
   });
 
   @override
@@ -761,7 +919,8 @@ class ActionCard extends StatelessWidget {
     // title, which is the right loser; above it, it takes its own line.
     final badge = Container(
       padding: const EdgeInsets.symmetric(horizontal: S.x3, vertical: S.x2),
-      decoration: BoxDecoration(color: p.fill(color), borderRadius: R.rSm),
+      decoration: BoxDecoration(color: p.fill(color),
+          borderRadius: p.expressive ? R.rPill : R.rSm),
       child: Text(
         cta,
         style: F.cap.copyWith(color: p.inkOnFill, fontWeight: FontWeight.w600),
@@ -773,7 +932,8 @@ class ActionCard extends StatelessWidget {
           width: S.tap,
           height: S.tap,
           alignment: Alignment.center,
-          decoration: BoxDecoration(color: p.wash(color), borderRadius: R.rMd),
+          decoration: BoxDecoration(color: p.wash(color),
+              borderRadius: R.controlOf(c)),
           child: Icon(icon, size: 20, color: p.on(color)),
         ),
         const SizedBox(width: S.x3),
@@ -797,6 +957,8 @@ class ActionCard extends StatelessWidget {
     );
     return Surface(
       onTap: onTap,
+      destination: destination,
+      onNavigate: onNavigate,
       semanticLabel: '$title. $meta. $cta',
       child: !wide
           ? head
@@ -902,6 +1064,8 @@ class StatusCard extends StatelessWidget {
   final String what, why, fix;
   final IconData icon;
   final VoidCallback? onFix;
+  final Widget? destination;
+  final Future<void> Function(DetailOpener)? onNavigate;
 
   /// Replaces the [icon] glyph — a small spinner in place of a static icon is
   /// the whole difference between "this is missing" and "this is happening",
@@ -915,6 +1079,8 @@ class StatusCard extends StatelessWidget {
     this.fix = '',
     this.icon = LucideIcons.circleHelp,
     this.onFix,
+    this.destination,
+    this.onNavigate,
     this.leading,
   });
 
@@ -939,25 +1105,26 @@ class StatusCard extends StatelessWidget {
     String what,
     Metric? m, {
     String unit = 'nights',
+    AppLocalizations? l,
     String why = '',
     String? gap,
     VoidCallback? onFix,
   }) {
     if (m != null && !m.isEmpty) return null;
-    final need = needMessageFromNote(m?.note, unit: unit);
+    final need = needMessageFromNote(m?.note, unit: unit, l: l);
     // A need_baseline note is rendered as the FIX ("Need 3 more nights"), so
     // its why stays the generic one — every other note is the why itself.
-    final told = need == null ? whyFromNote(m?.note) : null;
+    final told = need == null ? whyFromNote(m?.note, l: l) : null;
     return StatusCard(
       what,
       told != null
           ? (gap == null ? told : '$told $gap')
           : gap ??
               (why.isNotEmpty
-                  ? why
+                  ? localizedMetricReason(why, l)!
                   : need != null
-                      ? 'Not enough history yet to know what normal looks like for you.'
-                      : 'Nothing recorded says why this is missing.'),
+                      ? (l?.metricNeedHistory ?? 'Not enough history yet to know what normal looks like for you.')
+                      : (l?.homeGapNoReason ?? 'Nothing recorded says why this is missing.')),
       fix: need ?? '',
       onFix: onFix,
     );
@@ -970,6 +1137,8 @@ class StatusCard extends StatelessWidget {
       elevation: 0,
       color: p.card2,
       onTap: onFix,
+      destination: destination,
+      onNavigate: onNavigate,
       semanticLabel: '$what. $why. $fix'.trim(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -999,7 +1168,7 @@ class StatusCard extends StatelessWidget {
           ],
           if (fix.isNotEmpty) ...[
             const SizedBox(height: S.x3),
-            _Cta(fix, p.on(C.blue), arrow: onFix != null),
+            _Cta(fix, p.on(C.blue), arrow: onFix != null || destination != null || onNavigate != null),
           ],
         ],
       ),
@@ -1014,6 +1183,7 @@ class DeepDiveCard extends StatelessWidget {
   final Widget? preview;
   final Color color;
   final VoidCallback? onTap;
+  final Widget? destination;
 
   const DeepDiveCard(
     this.label,
@@ -1024,6 +1194,7 @@ class DeepDiveCard extends StatelessWidget {
     super.key,
     this.preview,
     this.onTap,
+    this.destination,
   });
 
   @override
@@ -1031,6 +1202,7 @@ class DeepDiveCard extends StatelessWidget {
     final p = P.of(c);
     return Surface(
       onTap: onTap,
+      destination: destination,
       semanticLabel: '$label, $value $unit. $cta',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1155,11 +1327,11 @@ Color _trendHue(P p, Trend trend, Rising rising) {
 
 /// What the arrow says, in words, for the screen reader — including the case
 /// where there is no arrow, so an empty slot is not a silent hole.
-String _trendWord(Trend? t) => switch (t) {
-      Trend.rising => 'trending up',
-      Trend.falling => 'trending down',
-      Trend.steady => 'steady',
-      null => 'no trend yet, not enough days recorded',
+String _trendWord(Trend? t, AppLocalizations? l) => switch (t) {
+      Trend.rising => l?.trendRising ?? 'trending up',
+      Trend.falling => l?.trendFalling ?? 'trending down',
+      Trend.steady => l?.trendSteady ?? 'steady',
+      null => l?.trendAbsent ?? 'no trend yet, not enough days recorded',
     };
 
 /// A metric in a list: name → value → trend.
@@ -1182,6 +1354,7 @@ class MetricRow extends StatelessWidget {
 
   final String? status;
   final VoidCallback? onTap;
+  final Widget? destination;
 
   const MetricRow(
     this.icon,
@@ -1195,6 +1368,7 @@ class MetricRow extends StatelessWidget {
     this.rising = Rising.neither,
     this.status,
     this.onTap,
+    this.destination,
   });
 
   @override
@@ -1263,13 +1437,13 @@ class MetricRow extends StatelessWidget {
             // colour, not a verdict.
             color: _trendHue(p, trend, rising),
           );
-    return Pressable(
-      onTap: onTap,
+    Widget press(VoidCallback? tap) => Pressable(
+      onTap: tap,
       // WHAT THE ROW SHOWS IS WHAT IT SAYS. `status` REPLACES the arrow in the
       // trailing slot, so announcing the trend under it described a glyph that
       // is not on screen — a row reading 'ON TRACK' told a screen reader
       // 'trending up'.
-      semanticLabel: '$name, $value $unit ${status ?? _trendWord(trend)}'
+      semanticLabel: '$name, $value $unit ${status ?? _trendWord(trend, AppLocalizations.of(c))}'
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim(),
       child: Padding(
@@ -1319,6 +1493,12 @@ class MetricRow extends StatelessWidget {
               ),
       ),
     );
+    return destination == null
+        ? press(onTap)
+        : DetailLink(
+            color: p.card,
+            builder: (open) => press(() => open<void>(destination!)),
+          );
   }
 }
 
@@ -1371,6 +1551,7 @@ class Recommendation extends StatelessWidget {
   final String rec, reason, action;
   final Color color;
   final VoidCallback? onTap;
+  final Widget? destination;
 
   const Recommendation(
     this.rec,
@@ -1379,13 +1560,14 @@ class Recommendation extends StatelessWidget {
     super.key,
     this.color = C.green,
     this.onTap,
+    this.destination,
   });
 
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
-    return Pressable(
-      onTap: onTap,
+    Widget press(VoidCallback? tap) => Pressable(
+      onTap: tap,
       semanticLabel: '$rec. $reason. $action',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1413,6 +1595,9 @@ class Recommendation extends StatelessWidget {
         ],
       ),
     );
+    return destination == null
+        ? press(onTap)
+        : DetailLink(builder: (open) => press(() => open<void>(destination!)));
   }
 }
 
@@ -1442,7 +1627,7 @@ class GoalTrajectory extends StatelessWidget {
     final p = P.of(c);
     final ink = p.on(color);
     return Surface(
-      semanticLabel: '$label, $current toward $target. $rate',
+      semanticLabel: AppLocalizations.of(c)?.goalProgressSemantic(label, current, target, rate) ?? '$label, $current toward $target. $rate',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1457,7 +1642,7 @@ class GoalTrajectory extends StatelessWidget {
             runSpacing: S.x1,
             children: [
               Text(current, style: F.n34.copyWith(color: p.ink)),
-              Text('Goal $target', style: F.cap.copyWith(color: p.ink3)),
+              Text(AppLocalizations.of(c)?.goalTarget(target) ?? 'Goal $target', style: F.cap.copyWith(color: p.ink3)),
             ],
           ),
           const SizedBox(height: S.x3),
@@ -1487,6 +1672,7 @@ class GoalTrajectory extends StatelessWidget {
 class Observation extends StatelessWidget {
   final String headline, detail, advice;
   final VoidCallback? onTap;
+  final Widget? destination;
 
   const Observation(
     this.headline,
@@ -1494,21 +1680,22 @@ class Observation extends StatelessWidget {
     super.key,
     this.advice = '',
     this.onTap,
+    this.destination,
   });
 
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
     final ink = p.on(C.orange);
-    return Pressable(
-      onTap: onTap,
-      semanticLabel: 'Health observation. $headline. $detail. $advice'.trim(),
+    Widget press(VoidCallback? tap) => Pressable(
+      onTap: tap,
+      semanticLabel: AppLocalizations.of(c)?.healthObservationSemantic(headline, detail, advice).trim() ?? 'Health observation. $headline. $detail. $advice'.trim(),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(S.x4),
         decoration: BoxDecoration(
           color: p.card,
-          borderRadius: R.rLg,
+          borderRadius: R.cardOf(c),
           border: Border(left: BorderSide(color: ink, width: 3)),
           boxShadow: p.el(1),
         ),
@@ -1521,7 +1708,7 @@ class Observation extends StatelessWidget {
                 const SizedBox(width: S.x2),
                 Flexible(
                   child: Text(
-                    'HEALTH OBSERVATION',
+                    (AppLocalizations.of(c)?.healthObservationLabel ?? 'Health observation').toUpperCase(),
                     style: F.over.copyWith(color: ink),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
@@ -1546,12 +1733,18 @@ class Observation extends StatelessWidget {
             ],
             if (onTap != null) ...[
               const SizedBox(height: S.x3),
-              _Cta('View data', ink),
+              _Cta(AppLocalizations.of(c)?.actionViewData ?? 'View data', ink),
             ],
           ],
         ),
       ),
     );
+    return destination == null
+        ? press(onTap)
+        : DetailLink(
+            color: p.card,
+            builder: (open) => press(() => open<void>(destination!)),
+          );
   }
 }
 
@@ -1575,7 +1768,7 @@ class Consistency extends StatelessWidget {
     final p = P.of(c);
     final n = of <= 0 ? 0 : of;
     return Semantics(
-      label: '$have of $n $unit. $label',
+      label: AppLocalizations.of(c)?.consistencySemantic('$have', '$n', unit == 'days' ? AppLocalizations.of(c)!.cycleUnitDays : unit, label) ?? '$have of $n $unit. $label',
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -1584,7 +1777,7 @@ class Consistency extends StatelessWidget {
             spacing: S.x1,
             children: [
               Text('$have', style: F.n24.copyWith(color: p.ink)),
-              Text('of $n $unit', style: F.cap.copyWith(color: p.ink3)),
+              Text(AppLocalizations.of(c)?.consistencyOfTotal('$n', unit == 'days' ? AppLocalizations.of(c)!.cycleUnitDays : unit) ?? 'of $n $unit', style: F.cap.copyWith(color: p.ink3)),
             ],
           ),
           const SizedBox(height: S.x2),
@@ -1653,8 +1846,8 @@ void sayUnreadable(BuildContext c, List<String> fields) {
   if (fields.isEmpty) return;
   ScaffoldMessenger.of(c).showSnackBar(SnackBar(
     content: Text(fields.length == 1
-        ? '${fields.first} is not a number. Nothing was saved.'
-        : '${fields.join(', ')} are not numbers. Nothing was saved.'),
+        ? (AppLocalizations.of(c)?.fieldNotNumber(fields.first) ?? '${fields.first} is not a number. Nothing was saved.')
+        : (AppLocalizations.of(c)?.fieldsNotNumbers(fields.join(', ')) ?? '${fields.join(', ')} are not numbers. Nothing was saved.')),
   ));
 }
 
@@ -1678,7 +1871,7 @@ Future<bool> confirmRemove(
       borderRadius: BorderRadius.vertical(top: Radius.circular(R.xxl)),
     ),
     builder: (s) => SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(S.x5),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -1706,7 +1899,7 @@ Future<bool> confirmRemove(
 
 /// Contextual sub-navigation inside a domain. Never a bottom tab — the bottom
 /// bar has five destinations and will not grow a sixth.
-class SubTabs extends StatelessWidget {
+class SubTabs extends StatefulWidget {
   final List<String> items;
   final int index;
   final ValueChanged<int> onTap;
@@ -1728,6 +1921,47 @@ class SubTabs extends StatelessWidget {
   });
 
   @override
+  State<SubTabs> createState() => _SubTabsState();
+}
+
+class _SubTabsState extends State<SubTabs> {
+  late List<GlobalKey> _keys = [for (final _ in widget.items) GlobalKey()];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _revealSelected();
+  }
+
+  @override
+  void didUpdateWidget(SubTabs oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.items.length != widget.items.length) {
+      _keys = [for (final _ in widget.items) GlobalKey()];
+    }
+    if (oldWidget.index != widget.index ||
+        !listEquals(oldWidget.items, widget.items)) {
+      _revealSelected();
+    }
+  }
+
+  void _revealSelected() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || widget.index < 0 || widget.index >= _keys.length) return;
+      final target = _keys[widget.index].currentContext;
+      final box = target?.findRenderObject();
+      if (target == null || box == null) return;
+      // Only move the chip strip, never a containing page's vertical scroll.
+      Scrollable.of(target).position.ensureVisible(
+        box,
+        alignment: .5,
+        duration: motion(context, Motion.base),
+        curve: Motion.effectsCurve(context),
+      );
+    });
+  }
+
+  @override
   Widget build(BuildContext c) {
     final p = P.of(c);
     return SizedBox(
@@ -1737,50 +1971,62 @@ class SubTabs extends StatelessWidget {
       // set overflows even a 430 pt screen. ScrollHint draws nothing at all
       // while the row fits, and scales with how much is left to scroll.
       child: ScrollHint(
-        child: ListView.separated(
+        child: SingleChildScrollView(
           scrollDirection: Axis.horizontal,
-          itemCount: items.length,
-          separatorBuilder: (_, _) => const SizedBox(width: S.x2),
-          itemBuilder: (_, i) {
-            final off = disabled.contains(i);
-            final on = i == index && !off;
-            return Pressable(
-              onTap: off ? null : () => onTap(i),
-              // `Pressable` drops `Semantics(button: true)` when `onTap` is
-              // null, so without this a screen reader announced a disabled
-              // pill exactly like a working one.
-              semanticLabel: off ? '${items[i]}, unavailable' : null,
-              child: AnimatedContainer(
-                duration: motion(c, Motion.base),
-                constraints: const BoxConstraints(minWidth: S.tap),
-                padding: const EdgeInsets.symmetric(horizontal: S.x4),
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  // THREE STATES, THREE LOOKS. A disabled pill used to compute
-                  // `on == false` and render exactly like a selectable-but-
-                  // unselected one — transparent, same ink — so the user
-                  // tapped it and nothing happened. An inert `card2` slot
-                  // reads as filled-but-dead against both the accent wash of
-                  // the active pill and the empty ground of a live one, and
-                  // `ink3` is solved for 4.5:1 ON `card2` (see theme.dart), so
-                  // this cue costs no contrast the way dimming would.
-                  color: off
-                      ? p.card2
-                      : on
-                          ? p.wash(color)
-                          : const Color(0x00000000),
-                  borderRadius: R.rPill,
-                ),
-                child: Text(
-                  items[i],
-                  style: F.cap.copyWith(
-                    color: on ? p.on(color) : p.ink3,
-                    fontWeight: on ? FontWeight.w600 : FontWeight.w500,
-                  ),
-                ),
-              ),
-            );
-          },
+          child: Row(
+            children: [
+              for (var i = 0; i < widget.items.length; i++) ...[
+                if (i > 0) const SizedBox(width: S.x2),
+                _chip(c, p, i),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _chip(BuildContext c, P p, int i) {
+    final off = widget.disabled.contains(i);
+    final on = i == widget.index && !off;
+    return Semantics(
+      key: _keys[i],
+      selected: on,
+      child: Pressable(
+        onTap: off ? null : () => widget.onTap(i),
+        // `Pressable` drops `Semantics(button: true)` when `onTap` is
+        // null, so without this a screen reader announced a disabled
+        // pill exactly like a working one.
+        semanticLabel: off ? '${widget.items[i]}, unavailable' : null,
+        child: AnimatedContainer(
+          duration: motion(c, Motion.base),
+          curve: Motion.effectsCurve(c),
+          constraints: const BoxConstraints(minWidth: S.tap),
+          padding: const EdgeInsets.symmetric(horizontal: S.x4),
+          alignment: Alignment.center,
+          decoration: BoxDecoration(
+            // THREE STATES, THREE LOOKS. A disabled pill used to compute
+            // `on == false` and render exactly like a selectable-but-
+            // unselected one — transparent, same ink — so the user
+            // tapped it and nothing happened. An inert `card2` slot
+            // reads as filled-but-dead against both the accent wash of
+            // the active pill and the empty ground of a live one, and
+            // `ink3` is solved for 4.5:1 ON `card2` (see theme.dart), so
+            // this cue costs no contrast the way dimming would.
+            color: off
+                ? p.card2
+                : on
+                ? p.wash(widget.color)
+                : const Color(0x00000000),
+            borderRadius: R.rPill,
+          ),
+          child: Text(
+            widget.items[i],
+            style: F.cap.copyWith(
+              color: on ? p.on(widget.color) : p.ink3,
+              fontWeight: on ? FontWeight.w600 : FontWeight.w500,
+            ),
+          ),
         ),
       ),
     );
@@ -1882,7 +2128,7 @@ class BigButton extends StatelessWidget {
         alignment: Alignment.center,
         decoration: BoxDecoration(
           color: soft ? p.wash(color) : p.fill(color),
-          borderRadius: R.rMd,
+          borderRadius: R.controlOf(c),
           boxShadow: soft ? null : p.el(2),
         ),
         child: Row(
@@ -1956,6 +2202,9 @@ class ChartFrame extends StatelessWidget {
   final List<(String, Color)> legend;
   final String? footnote;
 
+  /// Optional chart action, kept separate from the spoken title and unit.
+  final Widget? trailing;
+
   /// The series behind [child], for the SPOKEN version of the chart. A painter
   /// is a picture and a picture has no screen-reader form, so before this a
   /// fully-specified frame read out its title, its unit and then the three bare
@@ -1990,6 +2239,7 @@ class ChartFrame extends StatelessWidget {
     this.xLabels = const [],
     this.legend = const [],
     this.footnote,
+    this.trailing,
     this.empty,
     this.series = const [],
     this.xMarks = const [],
@@ -2143,7 +2393,21 @@ class ChartFrame extends StatelessWidget {
           // Title and unit share a line until the text scale makes that a
           // choice between truncating the title and dropping the unit — at
           // which point the unit moves under it. Neither is ever dropped.
-          ExcludeSemantics(child: _header(p, scaler.scale(1) > 1.3)),
+          if (trailing == null)
+            ExcludeSemantics(child: _header(p, scaler.scale(1) > 1.3))
+          else
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(
+                  child: ExcludeSemantics(
+                    child: _header(p, scaler.scale(1) > 1.3),
+                  ),
+                ),
+                const SizedBox(width: S.x2),
+                trailing!,
+              ],
+            ),
           const SizedBox(height: S.x3),
 
           // ── plot, or the honest absence of one ──
@@ -2404,7 +2668,7 @@ class NavBar extends StatelessWidget {
         children: [
           Pressable(
             onTap: onBack ?? () => Navigator.maybePop(c),
-            semanticLabel: 'Back',
+            semanticLabel: MaterialLocalizations.of(c).backButtonTooltip,
             child: Icon(LucideIcons.chevronLeft, size: 24, color: p.ink),
           ),
           Expanded(

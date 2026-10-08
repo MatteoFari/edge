@@ -247,7 +247,7 @@ class _ZonesDetailState extends State<ZonesDetail> {
             for (var i = 0; i < 5; i++) ...[
               OsTextField(
                 controller: ctrls[i],
-                label: 'Z${i + 1} · ${names[i]} starts at',
+                label: l?.zoneStartsAt('${i + 1}', l.zoneName(names[i].toLowerCase().replaceAll(RegExp(r'[^a-z]+'), '_'), names[i])) ?? 'Z${i + 1} · ${names[i]} starts at',
                 hint: l?.activityZonesBpmUnit ?? 'bpm',
                 keyboard: TextInputType.number,
               ),
@@ -342,7 +342,7 @@ class _ZonesDetailState extends State<ZonesDetail> {
       // below is a cause this screen wrote, and on all three real databases it
       // was the wrong one — the ceiling refused for an unstamped strap, and
       // "wear the band for your normal hard sessions" could never fix that.
-      final why = whyFromNote(d.ceilingNote);
+      final why = whyFromNote(d.ceilingNote, l: l);
       final tail = d.source == 'tanaka'
           // Only when there ARE age-estimated edges below. Said
           // unconditionally it described a section that, on every database in
@@ -420,7 +420,7 @@ class _ZonesDetailState extends State<ZonesDetail> {
       // payload carries the age. The age was set, the button led to a filled-in
       // field, and nothing changed. It is offered now only when the age really
       // is missing, which is the only state in which it does anything.
-      final why = whyFromNote(d.note, unit: 'days');
+      final why = whyFromNote(d.note, unit: 'days', l: l);
       final noAge = (d.age ?? 0) <= 0;
       return StatusCard(
         l?.activityZonesNoZonesTitle ?? 'No zones yet',
@@ -456,7 +456,7 @@ class _ZonesDetailState extends State<ZonesDetail> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Z${z.zone} · ${z.name}',
+                        'Z${z.zone} · ${l?.zoneName(z.name.toLowerCase().replaceAll(RegExp(r'[^a-z]+'), '_'), z.name) ?? z.name}',
                         style: F.body.copyWith(color: p.ink),
                       ),
                     ],
@@ -533,7 +533,7 @@ class _ZonesDetailState extends State<ZonesDetail> {
             // edges at all, edges off the age estimate, or a reserve anchor
             // still short — and the screen was choosing between two of them
             // off `source` alone.
-            whyFromNote(d.distNote, unit: 'days') ??
+            whyFromNote(d.distNote, unit: 'days', l: l) ??
                 (d.measured
                     ? (l?.activityZonesNeedsMonthBody ??
                         'Needs about a month of recorded sessions, each with a '

@@ -24,7 +24,7 @@ import '../../state/clock_format.dart' show formatClockOf;
 import '../../theme/theme_switcher.dart' show themedRoute;
 import '../ui2.dart';
 import 'coach.dart';
-import 'home_screen.dart' show go, pad;
+import 'home_screen.dart' show pad;
 
 /// Whether the paired band is a remembered WHOOP MG — false outside an
 /// AppState (goldens), like every other provider read in this folder.
@@ -81,7 +81,7 @@ class EcgEntryCard extends StatelessWidget {
       l?.ecgOpen ?? 'Open',
       LucideIcons.activity,
       C.domHealth,
-      onTap: () => go(c, const EcgHomeScreen()),
+      destination: const EcgHomeScreen(),
     );
   }
 }
@@ -145,12 +145,16 @@ class _EcgHomeScreenState extends State<EcgHomeScreen> {
     unawaited(_openDetail(context, viewId));
   }
 
-  Future<void> _openDetail(BuildContext c, String id) async {
+  Future<void> _openDetail(BuildContext c, String id, [DetailOpener? open]) async {
     final data = await EcgDetailData.load(id);
     if (!c.mounted || data == null) return;
-    await Navigator.of(c).push(
-      themedRoute((_) => EcgDetailScreen(data: data), name: 'EcgDetailScreen'),
-    );
+    if (open != null) {
+      await open<void>(EcgDetailScreen(data: data));
+    } else {
+      await Navigator.of(c).push(
+        themedRoute((_) => EcgDetailScreen(data: data), name: 'EcgDetailScreen'),
+      );
+    }
     if (mounted) await _load();
   }
 
@@ -197,10 +201,10 @@ class _EcgHomeScreenState extends State<EcgHomeScreen> {
                   children: [
                     for (var i = 0; i < _readings.length; i++) ...[
                       if (i > 0) Divider(color: p.line, height: 1),
-                      EcgReadingRow(
+                      DetailLink(builder: (open) => EcgReadingRow(
                         reading: _readings[i],
-                        onTap: () => _openDetail(c, _readings[i].id),
-                      ),
+                        onTap: () => _openDetail(c, _readings[i].id, open),
+                      )),
                     ],
                   ],
                 ),
@@ -485,7 +489,7 @@ class EcgCaptureBody extends StatelessWidget {
             padding: const EdgeInsets.symmetric(vertical: S.x3),
             decoration: BoxDecoration(
               color: primary ? p.fill(C.domHealth) : p.card2,
-              borderRadius: R.rMd,
+              borderRadius: R.controlOf(c),
             ),
             child: Text(
               label,

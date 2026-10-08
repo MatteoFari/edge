@@ -1,34 +1,8 @@
-// "in wellness screen when we enter recovery tab everything becomes grey,
-// except bottom navbar."
-//
-// That sentence is a precise description of ONE failure and no other, and it
-// is worth writing down because reading the widget tree will never find it.
-//
-// `AppShell` puts the domain in `Scaffold.body` and the tab row in
-// `Scaffold.bottomNavigationBar` — SIBLINGS. So anything that throws while the
-// domain BUILDS is caught by the framework, that whole subtree is replaced by
-// an `ErrorWidget`, and the bar beside it is untouched. `RenderErrorBox` paints
-// `0xF0C0C0C0` — "red in debug mode, a light gray otherwise" — so on a release
-// build a single exception inside `_recovery` is, pixel for pixel, a grey page
-// under a normal nav bar. Nothing about it looks like a crash.
-//
-// The consequence for testing: a green `flutter test` proves nothing here,
-// because the framework SWALLOWS the throw. `FlutterError.onError` has to be
-// captured and asserted on, and the render tree has to be walked, or this
-// exact bug reports as a pass.
-//
-// So this renders the real screen — the real `_load`, the real repository
-// seam, the real ListView — walks to Recovery the way a thumb does, and then
-// asserts three things, in the order they would fail:
-//
-//   1. nothing was reported to `FlutterError.onError` while the tab came up,
-//   2. no `ErrorWidget` is in the tree and no `RenderErrorBox` is in the RENDER
-//      tree — the substitution happens at paint, so the second is the one that
-//      cannot be satisfied by a page that has stopped drawing,
-//   3. the tab's first card is laid out with a real height.
-//
-// Light and dark, 1.0x and 2.0x text, at 390 pt — the narrow phone and the
-// accessibility size are where this screen's cards have failed before.
+// Recovery moved from Wellness into the existing Readiness and Sleep details.
+// Keep the original paint and malformed-leaf regression coverage at its new
+// destinations: a swallowed build error must never turn into a grey page.
+
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
@@ -59,9 +33,32 @@ class _Repo extends LocalRepository {
   final Map<String, dynamic>? stress;
 
   @override
+  Future<Map<String, dynamic>> getDayOverview(String date) async => const {
+    'readiness': {'value': 55.0},
+  };
+
+  @override
+  Future<Map<String, dynamic>> getDaySleepV2(String date) async => const {};
+
+  @override
+  Future<Map<String, dynamic>> getDayTimeline(String date) async => const {};
+
+  @override
+  Future<List<Map<String, dynamic>>> sleepWindows({
+    int days = 60,
+    String? before,
+  }) async => const [];
+
+  @override
+  Future<List<String>> availableDays() async => const [];
+
+  @override
   Future<Map<String, dynamic>> getToday() async => const {
-        'status': {'today_day': _day}
-      };
+    'status': {'today_day': _day},
+    'daily': {
+      'readiness': {'value': 62.0},
+    },
+  };
 
   @override
   Future<Map<String, dynamic>> getDayStress(String date) async =>
@@ -77,6 +74,7 @@ class _Repo extends LocalRepository {
       const {
         'readiness_glassbox': {
           'value': {
+            'inputs_used': 3,
             'breakdown': [
               {
                 'label': 'hrv',
@@ -109,17 +107,17 @@ class _Repo extends LocalRepository {
           },
         },
         'sleep_debt': {
-          'value': {'debt_hours': 1.4}
+          'value': {'debt_hours': 1.4},
         },
         'sleep_coach': {
           'need': {
-            'value': {'need_sec': 28800.0}
+            'value': {'need_sec': 28800.0},
           },
           'bedtime': {
-            'value': {'bedtime_min_of_day': 1380}
+            'value': {'bedtime_min_of_day': 1380},
           },
           'wake': {
-            'value': {'wake_min_of_day': 420}
+            'value': {'wake_min_of_day': 420},
           },
           'nap_credit_min': 20,
           'strain_bonus_min': 15,
@@ -128,61 +126,92 @@ class _Repo extends LocalRepository {
 
   @override
   Future<Map<String, dynamic>> getDayHeart(String date) async => const {
-        'baselines': {
-          'hrv': {
-            'value': 42.0,
-            'baseline': 51.0,
-            'spread': 4.0,
-            'delta': -9.0,
-            'mdc_multiples': -1.6,
-          },
-          'resting_hr': {
-            'value': 54.0,
-            'baseline': 56.0,
-            'spread': 2.0,
-            'delta': -2.0,
-            'mdc_multiples': -0.4,
-          },
-          'skin_temp': {
-            'value': 32411.0,
-            'baseline': 32380.0,
-            'spread': 20.0,
-            'delta': 31.0,
-            'mdc_multiples': 1.1,
-          },
-        },
-      };
+    'baselines': {
+      'hrv': {
+        'value': 42.0,
+        'baseline': 51.0,
+        'spread': 4.0,
+        'delta': -9.0,
+        'mdc_multiples': -1.6,
+      },
+      'resting_hr': {
+        'value': 54.0,
+        'baseline': 56.0,
+        'spread': 2.0,
+        'delta': -2.0,
+        'mdc_multiples': -0.4,
+      },
+      'skin_temp': {
+        'value': 32411.0,
+        'baseline': 32380.0,
+        'spread': 20.0,
+        'delta': 31.0,
+        'mdc_multiples': 1.1,
+      },
+    },
+  };
 
   /// `{t, v}` and dated off NOW, which is what `pointsOf` and `denseDays`
   /// actually read. A `{day, value}` fixture parses to an EMPTY series, every
   /// driver comes back `chartable: false`, and the expandable half of this
   /// card silently stops being covered.
   @override
-  Future<Map<String, dynamic>> getChart(String metric,
-      {int? from, int? to, Set<String> signals = const {}}) async {
+  Future<Map<String, dynamic>> getChart(
+    String metric, {
+    int? from,
+    int? to,
+    Set<String> signals = const {},
+  }) async {
     final midnight = DateTime.now().copyWith(
-        hour: 12, minute: 0, second: 0, millisecond: 0, microsecond: 0);
+      hour: 12,
+      minute: 0,
+      second: 0,
+      millisecond: 0,
+      microsecond: 0,
+    );
     return {
       'points': [
         for (var back = 29; back >= 0; back--)
           {
-            't': midnight
+            't':
+                midnight
                     .subtract(Duration(days: back))
                     .millisecondsSinceEpoch ~/
                 1000,
             'v': 40.0 + back % 7,
-          }
-      ]
+          },
+      ],
     };
   }
 
   @override
   Future<Map<String, JournalMetricValue>> getJournalMetrics(
-          String date) async =>
-      {};
+    String date,
+  ) async => {};
 
   @override
   Future<List<JournalFieldSpec>> getJournalFields() async => const [];
+}
+
+class _RetryRepo extends _Repo {
+  bool fail = true;
+
+  @override
+  Future<Map<String, dynamic>> getInsights() async {
+    if (fail) throw StateError('stored insight read failed');
+    return super.getInsights();
+  }
+}
+
+class _DelayedNightRepo extends _Repo {
+  final olderNight = Completer<Map<String, dynamic>>();
+
+  @override
+  Future<List<String>> availableDays() async => [_day, '2026-08-15'];
+
+  @override
+  Future<Map<String, dynamic>> getDaySleepV2(String date) =>
+      date == '2026-08-15' ? olderNight.future : super.getDaySleepV2(date);
 }
 
 /// `_load` goes to sqflite for medication, breathing and the habit history, and
@@ -199,7 +228,8 @@ class _Repo extends LocalRepository {
 Future<bool> _settleLoad(WidgetTester t) async {
   for (var i = 0; i < 40; i++) {
     await t.runAsync(
-        () => Future<void>.delayed(const Duration(milliseconds: 20)));
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
     await t.pump(const Duration(milliseconds: 16));
     if (find.byType(CircularProgressIndicator).evaluate().isEmpty) {
       await _frames(t);
@@ -225,18 +255,169 @@ void main() {
   });
   setUp(() => SharedPreferences.setMockInitialValues({}));
 
+  for (final screen in [const ReadinessDetail(), const SleepDetail()]) {
+    testWidgets(
+      '${screen.runtimeType} distinguishes a failed read and retries',
+      (t) async {
+        final repo = _RetryRepo();
+        await _openDetail(t, dark: false, scale: 1, repo: repo, screen: screen);
+        expect(find.textContaining('Could not read your'), findsOneWidget);
+        expect(find.text('No night to show'), findsNothing);
+        repo.fail = false;
+        await t.tap(find.text('Try again'));
+        expect(await _settleLoad(t), isTrue);
+        expect(find.textContaining('Could not read your'), findsNothing);
+        expect(t.takeException(), isNull);
+      },
+    );
+  }
+
+  testWidgets('historical readiness never borrows current driver comparisons', (
+    t,
+  ) async {
+    await _openDetail(
+      t,
+      dark: false,
+      scale: 1,
+      repo: _Repo(),
+      screen: const ReadinessDetail(day: '2000-01-01'),
+    );
+    expect(find.text('55'), findsOneWidget);
+    expect(find.byType(DriverBreakdown), findsNothing);
+    expect(find.textContaining('42 ms'), findsNothing);
+  });
+
+  testWidgets('selecting another sleep night hides the old data while loading', (
+    t,
+  ) async {
+    final repo = _DelayedNightRepo();
+    await _openDetail(t, dark: false, scale: 1, repo: repo);
+    expect(t.widget<DayNav>(find.byType(DayNav)).day, _day);
+    await t.tap(find.bySemanticsLabel('Previous day'));
+    await t.pump();
+    expect(find.byType(CircularProgressIndicator), findsOneWidget);
+    expect(find.text('No night to show'), findsNothing);
+    repo.olderNight.complete({});
+    expect(await _settleLoad(t), isTrue);
+    expect(t.widget<DayNav>(find.byType(DayNav)).day, '2026-08-15');
+    expect(find.text('No night to show'), findsOneWidget);
+    expect(t.takeException(), isNull);
+  });
+
+  test(
+    'one malformed coach value leaves the other stored values intact',
+    () async {
+      final insights = await _Repo().getInsights();
+      final coach = Map<String, dynamic>.from(insights['sleep_coach'] as Map);
+      coach['nap_credit_min'] = double.infinity;
+      final data = await SleepData.load(
+        _Repo(insights: {...insights, 'sleep_coach': coach}),
+      );
+      expect(data.need.value, 480);
+      expect(data.debt.value, 84);
+      expect(data.bedtime.value, 1380);
+      expect(data.wakeMinute, 420);
+      expect(data.strainBonusMin, 15);
+      expect(data.napCreditMin, isNull);
+    },
+  );
+
+  testWidgets('absent sleep need retains its reason and other stored facts', (
+    t,
+  ) async {
+    final insights = await _Repo().getInsights();
+    final coach = Map<String, dynamic>.from(insights['sleep_coach'] as Map);
+    coach['need'] = {'note': 'need_baseline:have=2,need=7'};
+    coach.remove('bedtime');
+    await _openDetail(
+      t,
+      dark: false,
+      scale: 1,
+      repo: _Repo(insights: {...insights, 'sleep_coach': coach}),
+    );
+    expect(find.text('Sleep need not established'), findsOneWidget);
+    expect(find.text('Need 5 more nights'), findsOneWidget);
+    await t.scrollUntilVisible(
+      find.text('Sleep need breakdown'),
+      180,
+      scrollable: find.byType(Scrollable).last,
+    );
+    await t.pumpAndSettle();
+    await t.tap(find.text('Sleep need breakdown'));
+    await _frames(t);
+    expect(find.text("Tonight's need"), findsNothing);
+    expect(find.text('Target bedtime'), findsNothing);
+    for (final label in [
+      'Sleep debt',
+      'Added for strain',
+      'Credited from naps',
+      'Target wake',
+    ]) {
+      expect(find.text(label), findsOneWidget);
+    }
+    expect(t.takeException(), isNull);
+  });
+
   for (final dark in [false, true]) {
     for (final scale in [1.0, 2.0]) {
       final where = '${dark ? 'dark' : 'light'}, ${scale}x text';
 
-      testWidgets('recovery paints its cards — $where', (t) async {
-        await _openRecovery(t, dark: dark, scale: scale, repo: _Repo());
+      testWidgets(
+        'Sleep Tonight paints without a night — $where',
+        (t) async {
+          await _openDetail(t, dark: dark, scale: scale, repo: _Repo());
 
-        expect(find.text('What charged and drained you'), findsOneWidget);
-        expect(find.text('Sleep need tonight'), findsOneWidget);
-        expect(find.byType(DriverBreakdown), findsOneWidget);
-        _expectCardPainted(t);
-      }, timeout: const Timeout(Duration(seconds: 60)));
+          expect(find.text('No night to show'), findsOneWidget);
+          expect(find.text('Next sleep'), findsOneWidget);
+          await t.scrollUntilVisible(
+            find.text('Sleep need breakdown'),
+            180,
+            scrollable: find.byType(Scrollable).last,
+          );
+          await t.pumpAndSettle();
+          await t.tap(find.text('Sleep need breakdown'));
+          await _frames(t);
+          for (final label in [
+            "Tonight's need",
+            'Sleep debt',
+            'Added for strain',
+            'Credited from naps',
+            'Target bedtime',
+            'Target wake',
+          ]) {
+            expect(find.text(label), findsOneWidget);
+          }
+          _expectCardPainted(t);
+        },
+        timeout: const Timeout(Duration(seconds: 60)),
+      );
+
+      testWidgets(
+        'Readiness preserves driver readings and history — $where',
+        (t) async {
+          await _openDetail(
+            t,
+            dark: dark,
+            scale: scale,
+            repo: _Repo(),
+            screen: const ReadinessDetail(),
+          );
+          expect(find.byType(DriverBreakdown), findsOneWidget);
+          expect(find.textContaining('42 ms'), findsOneWidget);
+          expect(find.textContaining('below your usual'), findsNWidgets(2));
+          await t.scrollUntilVisible(
+            find.text('HRV'),
+            180,
+            scrollable: find.byType(Scrollable).last,
+          );
+          await t.pumpAndSettle();
+          await t.tap(find.text('HRV'));
+          await _frames(t);
+          expect(find.textContaining('Your usual range'), findsOneWidget);
+          _expectCardPainted(t);
+        },
+        timeout: const Timeout(Duration(seconds: 60)),
+      );
 
       // ONE UNREADABLE LEAF MUST COST THAT LEAF, NOT THE SCREEN.
       //
@@ -253,7 +434,7 @@ void main() {
       // stopped painting looks different in each.
       testWidgets('a leaf of the wrong type costs its row, not the page — '
           '$where', (t) async {
-        await _openRecovery(
+        await _openDetail(
           t,
           dark: dark,
           scale: scale,
@@ -264,11 +445,11 @@ void main() {
                 'need': 12345,
                 'bedtime': {
                   // Not finite: `1e999` off the wire.
-                  'value': {'bedtime_min_of_day': double.infinity}
+                  'value': {'bedtime_min_of_day': double.infinity},
                 },
                 'wake': {
                   // Not a num.
-                  'value': {'wake_min_of_day': '07:00'}
+                  'value': {'wake_min_of_day': '07:00'},
                 },
                 'nap_credit_min': 'twenty',
                 'strain_bonus_min': double.nan,
@@ -286,8 +467,9 @@ void main() {
         // Every one of those is now ABSENT, which is a state this screen
         // already renders honestly — so the section is still here and still
         // says why, rather than the page being gone.
-        expect(find.text('Sleep need tonight'), findsOneWidget);
-        expect(find.text('No sleep need yet'), findsOneWidget);
+        expect(find.text('Next sleep'), findsOneWidget);
+        expect(find.text('Sleep need not established'), findsOneWidget);
+        expect(find.text('Sleep need breakdown'), findsNothing);
         _expectCardPainted(t);
       }, timeout: const Timeout(Duration(seconds: 60)));
     }
@@ -315,11 +497,12 @@ bool _harnessArtifact(String message) =>
 /// nothing. That assertion is the point: the framework SWALLOWS a build throw
 /// into an `ErrorWidget`, so without capturing `FlutterError.onError` the grey
 /// page reports as a passing test.
-Future<void> _openRecovery(
+Future<void> _openDetail(
   WidgetTester t, {
   required bool dark,
   required double scale,
   required LocalRepository repo,
+  Widget screen = const SleepDetail(),
 }) async {
   t.view.physicalSize = const Size(390 * 3, 844 * 3);
   t.view.devicePixelRatio = 3;
@@ -334,45 +517,40 @@ Future<void> _openRecovery(
   addTearDown(app.dispose);
   app.repo = repo;
 
-  await t.pumpWidget(MediaQuery(
-    data: MediaQueryData(textScaler: TextScaler.linear(scale)),
-    child: MaterialApp(
-      theme: buildTheme(dark ? Brightness.dark : Brightness.light),
-      home: ChangeNotifierProvider<AppState>.value(
-        value: app,
-        child: Builder(
-          builder: (c) => Scaffold(
-            backgroundColor: P.of(c).bg,
-            body: const WellnessScreen(),
+  await t.pumpWidget(
+    MediaQuery(
+      data: MediaQueryData(textScaler: TextScaler.linear(scale)),
+      child: MaterialApp(
+        theme: buildTheme(dark ? Brightness.dark : Brightness.light),
+        home: ChangeNotifierProvider<AppState>.value(
+          value: app,
+          child: Builder(
+            builder: (c) => Scaffold(backgroundColor: P.of(c).bg, body: screen),
           ),
         ),
       ),
     ),
-  ));
+  );
   final loaded = await _settleLoad(t);
-
-  // Cleared, NOT asserted on. The Mind tab this opens on has a pre-existing
-  // layout complaint of its own (`StartCard`'s `Spacer` sits in a `Column`
-  // that a `ListView` hands unbounded height), and this test is about the tab
-  // that comes next. Only what the switch to Recovery reports is in scope.
-  errors.clear();
-  await t.tap(find.text('Recovery'), warnIfMissed: false);
-  await _frames(t);
 
   // RESTORED BEFORE THE FIRST expect. A failing expectation while the test
   // still holds `FlutterError.onError` trips an assert inside the binding's
   // own error handler, and the test then hangs until its timeout instead of
   // reporting what actually went wrong.
   FlutterError.onError = previous;
-  expect(loaded, isTrue,
-      reason: 'the fixture never loaded, so nothing after this is a test');
+  expect(
+    loaded,
+    isTrue,
+    reason: 'the fixture never loaded, so nothing after this is a test',
+  );
   expect(
     errors
         .map((e) => e.exception.toString())
         .where((m) => !_harnessArtifact(m))
         .toList(),
     isEmpty,
-    reason: 'a throw inside the tab body is swallowed into an ErrorWidget — '
+    reason:
+        'a throw inside the tab body is swallowed into an ErrorWidget — '
         'grey on a release build, and green here unless this is asserted',
   );
   expect(find.byType(ErrorWidget), findsNothing);
@@ -392,9 +570,13 @@ void _expectCardPainted(WidgetTester t) {
   }
 
   walk(t.binding.rootElement!.renderObject!);
-  expect(boxes, isEmpty,
-      reason: 'a RenderErrorBox is in the tree — that is the grey page, and it '
-          'paints 0xF0C0C0C0 over everything the failing subtree covered');
+  expect(
+    boxes,
+    isEmpty,
+    reason:
+        'a RenderErrorBox is in the tree — that is the grey page, and it '
+        'paints 0xF0C0C0C0 over everything the failing subtree covered',
+  );
 
   // …and the tab's first card is laid out with a real height. An ErrorWidget
   // has no `Surface` under it at all, so this fails before the walk above even

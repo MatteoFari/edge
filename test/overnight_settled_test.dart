@@ -201,6 +201,7 @@ void main() {
     final today =
         await LocalRepositoryImpl(getProfileMap: () => const {}).getToday();
     expect(today['status']['overnight_day'], yesterday);
+    expect(today['status']['last_sleep_day'], yesterday);
     expect(today['hrv']['rmssd'], 77);
   });
 
@@ -237,6 +238,7 @@ void main() {
     final today =
         await LocalRepositoryImpl(getProfileMap: () => const {}).getToday();
     expect(today['status']['overnight_day'], todayLabel());
+    expect(today['status']['last_sleep_day'], yesterday);
     expect(today['hrv']?['rmssd'], isNot(77));
   });
 
@@ -261,6 +263,7 @@ void main() {
     });
     await LocalDb.refreshComputeFreshness();
     expect((await repo.getChart('recovery'))['points'], hasLength(1));
+    expect((await repo.getToday())['status']['last_sleep_day'], todayLabel());
   });
 
   test('recovery push waits for the same settled night Home does', () {

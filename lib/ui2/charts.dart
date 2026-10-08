@@ -410,7 +410,7 @@ class LineChart extends CustomPainter {
 
   @override
   void paint(Canvas cv, Size s) {
-    if (d.length < 2 || s.width <= 0) return;
+    if (d.isEmpty || s.width <= 0) return;
     final a = axis;
     final e = a == null ? autoExtent(d) : null;
     if (a == null && e == null) return; // nothing finite to draw

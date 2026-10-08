@@ -18,7 +18,6 @@ import 'package:provider/provider.dart';
 import '../../ai/journal_ai.dart';
 import '../../coach/coach_config.dart';
 import '../../data/day_label.dart';
-import '../../data/db.dart';
 import '../../data/journal_fields.dart';
 import '../../l10n/app_localizations.dart';
 import '../../state/app_state.dart';
@@ -27,7 +26,7 @@ import '../ui2.dart';
 import 'coach.dart' show coachReady;
 import 'home_screen.dart' show unitsOf;
 import 'custom_journal_field_sheet.dart';
-import 'metric_detail.dart' show detailScaffold;
+import 'weight_trend.dart';
 
 class JournalCompose extends StatefulWidget {
   const JournalCompose({super.key, this.date});
@@ -333,7 +332,7 @@ class _JournalComposeState extends State<JournalCompose> {
                                         : _tags.add(t),
                                   ),
                                   child: Pill(
-                                    t,
+                                    journalTagLabel(t, l),
                                     _tags.contains(t) ? C.domMind : C.n400,
                                     icon: _tags.contains(t)
                                         ? LucideIcons.check
@@ -461,7 +460,7 @@ class MoodPicker extends StatelessWidget {
                       // centres the face.
                       alignment: Alignment.center,
                       decoration: BoxDecoration(
-                        borderRadius: R.rMd,
+                        borderRadius: R.controlOf(c),
                         color: value == i + 1
                             ? p.fill(_tints[i])
                             : p.wash(_tints[i]),
@@ -523,16 +522,16 @@ class FieldStepper extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(spec.label, style: F.body.copyWith(color: p.ink)),
+                Text(spec.localizedLabel(l), style: F.body.copyWith(color: p.ink)),
                 Text(
                   v == null
                       ? (l?.journalComposeNotLogged ?? 'Not logged')
-                      : spec.formatWithUnit(v),
+                      : spec.localizedValue(v, l),
                   style: F.over.copyWith(color: p.ink3),
                 ),
                 if (v != null && v > 0 && onTime != null)
                   Pressable(
-                    semanticLabel: l?.journalComposeWhenWasLastField(spec.label) ??
+                    semanticLabel: l?.journalComposeWhenWasLastField(spec.localizedLabel(l)) ??
                         'When was the last ${spec.label}',
                     onTap: onTime,
                     child: Text(
@@ -590,7 +589,10 @@ class _Step extends StatelessWidget {
       child: Container(
         width: 32,
         height: 32,
-        decoration: BoxDecoration(color: p.card2, borderRadius: R.rSm),
+        decoration: BoxDecoration(
+          color: p.card2,
+          borderRadius: p.expressive ? R.rPill : R.rSm,
+        ),
         child: Icon(icon, size: 16, color: enabled ? p.ink2 : p.ink3),
       ),
     );
@@ -628,7 +630,7 @@ class OsTextField extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: S.x3, vertical: S.x2),
           decoration: BoxDecoration(
             color: p.card,
-            borderRadius: R.rMd,
+            borderRadius: p.expressive ? R.rXl : R.rMd,
             border: Border.all(color: p.line),
           ),
           // The label is drawn as a sibling `Text`, which a screen reader reads
@@ -683,7 +685,6 @@ class OsTextField extends StatelessWidget {
 
 /// How much history the trend screen reads. Long enough for a real four-week
 /// change to be visible with a season either side of it.
-const int kWeightTrendDays = 180;
 
 /// One journal row, typed rather than stepped, plus the way into the trend.
 class _WeightRow extends StatelessWidget {
@@ -717,8 +718,8 @@ class _WeightRow extends StatelessWidget {
                       v == null
                           ? (l?.journalComposeNotEntered ?? 'Not entered')
                           : (l?.journalComposeEnteredNotMeasured(
-                                  u == null ? '${v.toStringAsFixed(1)} kg' : u.weight(v)) ??
-                              '${u == null ? '${v.toStringAsFixed(1)} kg' : u.weight(v)} · entered, not measured'),
+                                  u == null ? '${displayNumber(v, l, decimals: 1)} kg' : u.localizedWeight(v, l)) ??
+                              '${u == null ? '${displayNumber(v, l, decimals: 1)} kg' : u.localizedWeight(v, l)} · entered, not measured'),
                       style: F.over.copyWith(color: p.ink3),
                     ),
                   ],
@@ -735,7 +736,10 @@ class _WeightRow extends StatelessWidget {
                     horizontal: S.x3,
                     vertical: S.x2,
                   ),
-                  decoration: BoxDecoration(color: p.card2, borderRadius: R.rSm),
+                  decoration: BoxDecoration(
+                    color: p.card2,
+                    borderRadius: p.expressive ? R.rPill : R.rSm,
+                  ),
                   child: Text(
                     v == null
                         ? (l?.journalComposeEnter ?? 'Enter')
@@ -746,16 +750,14 @@ class _WeightRow extends StatelessWidget {
               ),
             ],
           ),
-          Pressable(
+          DetailLink(builder: (open) => Pressable(
             semanticLabel: l?.journalComposeSeeWeightTrend ?? 'See the weight trend',
-            onTap: () => Navigator.of(c).push(
-              MaterialPageRoute<void>(builder: (_) => const _WeightTrend()),
-            ),
+            onTap: () => open(const WeightTrendScreen()),
             child: Text(
               l?.journalComposeSeeTheTrend ?? 'See the trend',
               style: F.over.copyWith(color: p.on(C.blue)),
             ),
-          ),
+          )),
         ],
       ),
     );
@@ -786,7 +788,7 @@ class _WeightRow extends StatelessWidget {
           children: [
             OsTextField(
               controller: ctrl,
-              label: u?.weightLabel ?? (l?.journalComposeWeightKgLabel ?? 'Weight (kg)'),
+              label: u?.localizedWeightLabel(l) ?? (l?.journalComposeWeightKgLabel ?? 'Weight (kg)'),
               hint: imperial ? '154' : '70.0',
               keyboard: const TextInputType.numberWithOptions(decimal: true),
             ),
@@ -820,7 +822,7 @@ class _WeightRow extends StatelessWidget {
               // field, and the form says which one rather than storing a hole.
               if (Typed.of(ctrl.text).bad) {
                 sayUnreadable(
-                    dc, [u?.weightLabel ?? (l?.journalComposeWeightLabel ?? 'Weight')]);
+                    dc, [u?.localizedWeightLabel(l) ?? (l?.journalComposeWeightLabel ?? 'Weight')]);
                 return;
               }
               final kgIn = u == null
@@ -844,154 +846,6 @@ class _WeightRow extends StatelessWidget {
 /// One line, no headline number, no delta, no arrow, no target and no colour
 /// that means good or bad. If a future change wants to add any of those, the
 /// answer is in the ceiling at the top of this section.
-class _WeightTrend extends StatefulWidget {
-  const _WeightTrend();
-
-  @override
-  State<_WeightTrend> createState() => _WeightTrendState();
-}
-
-class _WeightTrendState extends State<_WeightTrend> {
-  Map<String, double> _byDay = const {};
-  bool _loading = true;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
-  }
-
-  Future<void> _load() async {
-    try {
-      // Day arithmetic, not a subtracted duration: a DST day is 23 or 25 hours
-      // long and `now - 180 days` lands on the wrong calendar date across one.
-      final now = DateTime.now();
-      final since = dayLabelOf(
-        DateTime(now.year, now.month, now.day - (kWeightTrendDays - 1)),
-      );
-      final rows = await LocalDb.journalMetricsByDay(sinceDaysEpoch: since);
-      if (!mounted) return;
-      setState(() {
-        _byDay = {
-          for (final e in rows.entries)
-            // The `when` does real work — a non-finite or non-positive weight
-            // is not a weight — and the null-aware element form has nowhere to
-            // put a guard.
-            // ignore: use_null_aware_elements
-            if (e.value['weight_kg']?.value case final v?
-                when v.isFinite && v > 0)
-              e.key: v,
-        };
-        _loading = false;
-      });
-    } catch (_) {
-      if (mounted) setState(() => _loading = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext c) {
-    final l = AppLocalizations.of(c);
-    final title = l?.journalComposeWeightLabel ?? 'Weight';
-    if (_loading) {
-      return detailScaffold(c, title, const [
-        SizedBox(height: S.x8),
-        Center(child: CircularProgressIndicator()),
-      ]);
-    }
-    final p = P.of(c);
-    final u = unitsOf(c);
-    final trend = weightTrendEwma(_byDay);
-    if (trend.length < 2) {
-      return detailScaffold(c, title, [
-        const SizedBox(height: S.x2),
-        StatusCard(
-          l?.journalComposeNotEnoughEntriesTitle ?? 'Not enough entries for a trend',
-          l?.journalComposeNotEnoughEntriesBody ??
-              'The line is a seven-day average through what you entered, so it '
-                  'needs at least two days. Nothing is filled in between them.',
-          icon: LucideIcons.scale,
-        ),
-      ]);
-    }
-
-    // Indexed by CALENDAR DAY, never compacted: a fortnight nobody weighed is a
-    // hole in the line, and compacting would draw a straight, confident segment
-    // across it.
-    final days = trend.keys.toList()..sort();
-    final first = DateTime.parse(days.first);
-    final span = calendarDaysBetween(first, DateTime.parse(days.last));
-    // The controller owns every conversion; this only asks it for the number
-    // rather than the sentence, because an axis cannot print "72.4 kg".
-    double show(double kg) =>
-        u == null ? kg : (double.tryParse(u.weightField(kg)) ?? kg);
-    // NOT null-aware: a null here is a day she did not weigh, and dropping it
-    // would compact the series and draw a confident straight segment across
-    // the gap. The holes are the point.
-    final vals = <double?>[
-      for (var i = 0; i <= span; i++) _at(trend, first, i, show),
-    ];
-    final present = <double>[for (final v in vals) ?v];
-    final axis = AxisSpec.of(present, format: axisFixed);
-
-    return detailScaffold(c, title, [
-      const SizedBox(height: S.x2),
-      Surface(
-        child: ChartFrame(
-          title: l?.journalComposeSevenDayTrend ?? 'Seven-day trend',
-          unit: u?.isImperial == true ? 'lb' : 'kg',
-          height: 140,
-          yAxis: axis,
-          xLabels: [days.first, days.last],
-          footnote: l?.journalComposeTrendFootnote ??
-              'Entered by you. Days with no entry are left empty.',
-          series: vals,
-          empty: axis == null ? const NoData() : null,
-          child: axis == null
-              ? const SizedBox.shrink()
-              // No fill: a filled area under an axis that starts at 68 kg is a
-              // truncated axis with the truncation hidden.
-              : CustomPaint(
-                  size: Size.infinite,
-                  painter: LineChart(
-                    vals,
-                    p.on(C.blue),
-                    fill: false,
-                    t: animate(c, 1),
-                    axis: axis,
-                  ),
-                ),
-        ),
-      ),
-      const SizedBox(height: S.x4),
-      Text(
-        l?.journalComposeWeightTrendExplainer(trend.length) ??
-            'Entered by you or your scale — the band does not measure weight. What '
-            'is drawn is a seven-day average, because a scale moves one to two '
-            'kilos on water and food alone and the raw readings would show that as '
-            'something happening to your body. ${trend.length} '
-            '${trend.length == 1 ? 'day' : 'days'} entered.',
-        style: F.over.copyWith(color: p.ink3, height: 1.5),
-      ),
-    ]);
-  }
-
-  /// The trend value on one calendar day, or null. Nulls are what draw the gaps
-  /// — there is no nearest-neighbour lookup here on purpose.
-  double? _at(
-    Map<String, double> trend,
-    DateTime first,
-    int offset,
-    double Function(double) show,
-  ) {
-    // Calendar arithmetic, not a 24 h duration: a DST day is 23 or 25 hours
-    // long and adding days as hours slides the whole series by one across one.
-    final day = DateTime(first.year, first.month, first.day + offset);
-    final v = trend[dayLabelOf(day)];
-    return v == null ? null : show(v);
-  }
-}
-
 // ══════════════════════════ AI JOURNAL CHAT ══════════════════════════
 //
 // The pre-sleep "tell me about your day" chat over [JournalAiEngine]. The
@@ -1064,6 +918,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
   @override
   Widget build(BuildContext c) {
     final p = P.of(c);
+    final l = AppLocalizations.of(c);
     final last = _last;
     return Padding(
       padding: EdgeInsets.only(bottom: MediaQuery.of(c).viewInsets.bottom),
@@ -1073,7 +928,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
           height: MediaQuery.of(c).size.height * 0.75,
           decoration: BoxDecoration(
             color: p.bg,
-            borderRadius: BorderRadius.vertical(top: Radius.circular(R.lg)),
+            borderRadius: BorderRadius.vertical(top: Radius.circular(p.expressive ? R.xxl : R.lg)),
           ),
           child: Column(
             children: [
@@ -1084,7 +939,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                 decoration: BoxDecoration(color: p.line, borderRadius: R.rSm),
               ),
               const SizedBox(height: S.x3),
-              Text('Talk it through',
+              Text(l?.journalTalkTitle ?? 'Talk it through',
                   style: F.head.copyWith(color: p.ink)),
               const SizedBox(height: S.x2),
               Expanded(
@@ -1093,7 +948,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                         child: Padding(
                           padding: const EdgeInsets.all(S.x4),
                           child: Text(
-                            'Tell it about your day — it proposes tags and a '
+                            l?.journalTalkBody ?? 'Tell it about your day — it proposes tags and a '
                             'note, you decide what to keep.',
                             textAlign: TextAlign.center,
                             style: F.body.copyWith(color: p.ink3),
@@ -1119,7 +974,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                                   maxWidth: MediaQuery.of(c).size.width * 0.75),
                               decoration: BoxDecoration(
                                 color: t.fromUser ? p.fill(C.domMind) : p.card2,
-                                borderRadius: R.rMd,
+                                borderRadius: p.expressive ? R.rXl : R.rMd,
                               ),
                               child: Text(
                                 t.text,
@@ -1157,8 +1012,10 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                         onSubmitted: (_) => unawaited(_send()),
                         decoration: InputDecoration(
                           isDense: true,
-                          hintText: 'Tell it about your day…',
-                          border: OutlineInputBorder(borderRadius: R.rMd),
+                          hintText: l?.journalTalkHint ?? 'Tell it about your day…',
+                          border: OutlineInputBorder(
+                            borderRadius: p.expressive ? R.rXl : R.rMd,
+                          ),
                         ),
                       ),
                     ),
@@ -1171,7 +1028,7 @@ class _JournalAiSheetState extends State<_JournalAiSheet> {
                         alignment: Alignment.center,
                         decoration: BoxDecoration(
                           color: p.fill(C.domMind),
-                          borderRadius: R.rMd,
+                          borderRadius: R.controlOf(c),
                         ),
                         child: _busy
                             ? SizedBox(

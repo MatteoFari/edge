@@ -18,7 +18,6 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import '../../data/auto_backup.dart';
 import '../../data/off_lookup.dart';
 import '../../health/health_export.dart' show HealthLinkState;
 import '../../health/health_import_state.dart';
@@ -75,6 +74,8 @@ class _MoreSettingsState extends State<MoreSettings> {
   bool _barcode = offLookupAllowed;
   String _version = '';
   int _taps = 0;
+  bool _savingInterfaceStyle = false;
+  bool _savingPalette = false;
 
   /// The home-screen icon, asked of the OS rather than stored — see
   /// lib/platform/app_icon.dart. Null until the answer arrives, and the row is
@@ -144,6 +145,72 @@ class _MoreSettingsState extends State<MoreSettings> {
     });
   }
 
+  Future<void> _pickInterfaceStyle(BuildContext c) async {
+    if (_savingInterfaceStyle) return;
+    final theme = c.read<ThemeController>();
+    final p = P.of(c);
+    final picked = await showModalBottomSheet<InterfaceStyle>(
+      context: c,
+      backgroundColor: p.card,
+      showDragHandle: true,
+      isScrollControlled: true,
+      sheetAnimationStyle: sheetMotion(c),
+      builder: (sheet) => InterfaceStylePicker(
+        chosen: theme.interfaceStyle,
+        onPick: (style) => Navigator.of(sheet).pop(style),
+      ),
+    );
+    if (!mounted || picked == null || picked == theme.interfaceStyle) return;
+    setState(() => _savingInterfaceStyle = true);
+    var saved = false;
+    try {
+      saved = await theme.setInterfaceStyle(picked);
+    } catch (_) {
+      // A refused preference write is a failed choice, whatever its cause.
+    } finally {
+      if (mounted) setState(() => _savingInterfaceStyle = false);
+    }
+    if (!mounted || saved) return;
+    final l = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(l?.settingsInterfaceStyleSaveFailed ??
+          'Could not save the interface style. Please try again.'),
+    ));
+  }
+
+  Future<void> _pickPalette(BuildContext c) async {
+    if (_savingPalette) return;
+    final theme = c.read<ThemeController>();
+    final p = P.of(c);
+    final picked = await showModalBottomSheet<ExpressivePalette>(
+      context: c,
+      backgroundColor: p.card,
+      showDragHandle: true,
+      isScrollControlled: true,
+      sheetAnimationStyle: sheetMotion(c),
+      builder: (sheet) => ExpressivePalettePicker(
+        chosen: theme.palette,
+        onPick: (palette) => Navigator.of(sheet).pop(palette),
+      ),
+    );
+    if (!mounted || picked == null || picked == theme.palette) return;
+    setState(() => _savingPalette = true);
+    var saved = false;
+    try {
+      saved = await theme.setPalette(picked);
+    } catch (_) {
+      // Report a refused preference write without claiming it was saved.
+    } finally {
+      if (mounted) setState(() => _savingPalette = false);
+    }
+    if (!mounted || saved) return;
+    final l = AppLocalizations.of(context);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(l?.settingsPaletteSaveFailed ??
+          'Could not save the colour palette. Please try again.'),
+    ));
+  }
+
   @override
   Widget build(BuildContext c) {
     final app = c.watch<AppState>();
@@ -155,11 +222,26 @@ class _MoreSettingsState extends State<MoreSettings> {
       devMode: _dev,
       onVersionTap: _tapVersion,
       onToggleDev: () => _setDev(false),
-      onGallery: () => goto(c, const GalleryScreen()),
-      units: units.system.label,
-      appearance: theme.choice.label,
+      onNavigate: (open, page) async {
+        await open<void>(page);
+      },
+      units: AppLocalizations.of(c)?.unitSystemName(units.system.name, units.system.label) ?? units.system.label,
+      appearance: switch (theme.choice) {
+        AppThemeChoice.system =>
+          AppLocalizations.of(c)?.settingsAppearanceSystem ?? 'System',
+        AppThemeChoice.light =>
+          AppLocalizations.of(c)?.settingsAppearanceLight ?? 'Light',
+        AppThemeChoice.dark =>
+          AppLocalizations.of(c)?.settingsAppearanceDark ?? 'Dark',
+      },
+      interfaceStyle: theme.interfaceStyle,
+      onPickInterfaceStyle:
+          _savingInterfaceStyle ? null : () => _pickInterfaceStyle(c),
+      palette: theme.palette,
+      onPickPalette: _savingPalette ? null : () => _pickPalette(c),
       clockFormat: clock.format,
       cycleTracking: app.cycleTrackingEnabled,
+      homeAiBriefing: app.homeAiBriefingEnabled,
       zoneAlertEnabled: app.zoneAlertEnabled,
       zoneAlertZone: app.zoneAlertTargetZone,
       appIcon: _icon,
@@ -180,11 +262,6 @@ class _MoreSettingsState extends State<MoreSettings> {
       updateChecks: app.updateChecksEnabled,
       updateAvailable: app.updateAvailable,
       updateMandatory: app.updateMandatory,
-      onEditProfile: () => goto(c, const EditProfile()),
-      onAlarm: () => goto(c, const AlarmScreen()),
-      onNotifications: () => goto(c, const NotificationSettings()),
-      onData: () => goto(c, const DataScreen()),
-      onAutomation: () => goto(c, const AutomationSettings()),
       onCycleUnits: () => units.setSystem(units.isImperial
           ? UnitSystem.metric
           : UnitSystem.imperial),
@@ -200,6 +277,8 @@ class _MoreSettingsState extends State<MoreSettings> {
       },
       onToggleCycleTracking: () =>
           app.setCycleTrackingEnabled(!app.cycleTrackingEnabled),
+      onToggleHomeAiBriefing: () =>
+          app.setHomeAiBriefingEnabled(!app.homeAiBriefingEnabled),
       onTogglePhoneSteps: () => app.phoneStepsEnabled
           ? app.disablePhoneSteps()
           : app.requestPhoneSteps(),
@@ -242,7 +321,9 @@ class _IconRow extends StatelessWidget {
           height: 32,
           alignment: Alignment.center,
           decoration:
-              BoxDecoration(color: p.wash(C.indigo), borderRadius: R.rSm),
+              BoxDecoration(
+                  color: p.wash(C.indigo),
+                  borderRadius: p.expressive ? R.rPill : R.rSm),
           child: Icon(LucideIcons.image, size: 16, color: p.on(C.indigo)),
         ),
         const SizedBox(width: S.x3),
@@ -294,7 +375,7 @@ class _IconChoice extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.all(S.x1 / 2),
         decoration: BoxDecoration(
-          borderRadius: R.rMd,
+          borderRadius: R.controlOf(c),
           border: Border.all(
               color: selected ? p.on(C.indigo) : p.line, width: selected ? 2 : 1),
         ),
@@ -453,13 +534,15 @@ Future<void> _confirmReset(BuildContext c, AppState app) async {
       // It now removes all of that, so it can say so.
       content: Text(
         l?.settingsResetBody ??
-            'This deletes, permanently and with no copy anywhere else:\n\n'
+            'This permanently deletes this app\'s data on this device:\n\n'
                 '· every measured day, sleep, workout and route\n'
                 '· every lab result, meal, medication dose, habit, breathing session '
                 'and logged set\n'
                 '· your journal, cycle log and rolling baselines\n'
                 '· your profile, every preference and any stored AI key\n'
                 '· the home-screen widget and every scheduled reminder\n\n'
+                'Exported copies and backups in previous or unavailable folders '
+                'may remain. Delete those separately.\n\n'
                 'The band is unpaired, and it cannot re-send history it has already '
                 'handed over. Export from Your data first if you want a copy.',
       ),
@@ -473,29 +556,226 @@ Future<void> _confirmReset(BuildContext c, AppState app) async {
       ],
     ),
   );
-  if (ok != true) return;
-  await app.resetAllData();
-  // "with no copy anywhere else" was false while automatic backup was on:
-  // `wipeAll` deletes rows and cannot touch files, so up to [kBackupsKept]
-  // gzipped whole-database copies survived in a folder the user can browse and
-  // Import a file can read straight back.
+  if (ok != true || !c.mounted) return;
+  final messenger = ScaffoldMessenger.of(c);
+  String? backupCleanupError;
   try {
-    await pruneBackups(await backupDirectory(), keep: 0);
-  } catch (_) {
-    // No backup folder is the normal case — nothing to delete.
+    backupCleanupError = await app.resetAllData();
+  } catch (e) {
+    if (c.mounted) {
+      ScaffoldMessenger.of(c).showSnackBar(SnackBar(
+        content: Text(l?.dataFailed(e.toString()) ?? 'Failed: $e'),
+      ));
+    }
+    return;
   }
   // resetAllData swaps the gate to Welcome, which is UNDER this screen —
   // without this the user stays on Settings, reading a profile that has been
   // deleted.
   if (c.mounted) backToRoot(c);
+  if (backupCleanupError != null && messenger.mounted) {
+    messenger.showSnackBar(SnackBar(
+      content: Text(l?.settingsResetBackupWarning ??
+          'App data deleted. Backup cleanup was incomplete. '
+              'Some files or folder access may remain.'),
+    ));
+  }
+}
+
+String interfaceStyleLabel(BuildContext c, InterfaceStyle style) {
+  final l = AppLocalizations.of(c);
+  return switch (style) {
+    InterfaceStyle.original => l?.settingsInterfaceStyleOriginal ?? 'Original',
+    InterfaceStyle.expressive =>
+      l?.settingsInterfaceStyleExpressive ?? 'Expressive',
+  };
+}
+
+/// Interface style is separate from light/dark appearance: changing these
+/// shapes does not choose a different brightness or replace the app state.
+class InterfaceStylePicker extends StatelessWidget {
+  final InterfaceStyle chosen;
+  final ValueChanged<InterfaceStyle> onPick;
+
+  const InterfaceStylePicker(
+      {super.key, required this.chosen, required this.onPick});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, S.x6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l?.settingsInterfaceStyleTitle ?? 'Interface style',
+                style: F.t2.copyWith(color: p.ink)),
+            const SizedBox(height: S.x2),
+            Text(l?.settingsInterfaceStyleHint ??
+                    'Choose the shapes and controls. Light and dark appearance '
+                        'follow your separate setting.',
+                style: F.cap.copyWith(color: p.ink2)),
+            const SizedBox(height: S.x4),
+            for (final style in InterfaceStyle.values) ...[
+              if (style != InterfaceStyle.values.first)
+                const SizedBox(height: S.x3),
+              Semantics(
+                selected: style == chosen,
+                child: Surface(
+                  color: style == chosen ? p.wash(C.purple) : p.card2,
+                  onTap: () => onPick(style),
+                  child: Row(children: [
+                    Icon(
+                        style == chosen
+                            ? LucideIcons.circleCheck
+                            : LucideIcons.circle,
+                        size: 22,
+                        color: style == chosen ? p.on(C.purple) : p.ink3),
+                    const SizedBox(width: S.x3),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(interfaceStyleLabel(c, style),
+                              style: F.head.copyWith(color: p.ink)),
+                          const SizedBox(height: S.x1),
+                          Text(
+                              switch (style) {
+                                InterfaceStyle.original =>
+                                  l?.settingsInterfaceStyleOriginalDescription ??
+                                      'Familiar cards and compact controls.',
+                                InterfaceStyle.expressive =>
+                                  l?.settingsInterfaceStyleExpressiveDescription ??
+                                      'Rounder cards, pill controls and stronger '
+                                          'visual emphasis.',
+                              },
+                              style: F.cap.copyWith(color: p.ink2)),
+                          if (style == chosen) ...[
+                            const SizedBox(height: S.x1),
+                            Text(l?.settingsInterfaceStyleSelected ?? 'Selected',
+                                style: F.cap.copyWith(color: p.on(C.purple))),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String expressivePaletteLabel(BuildContext c, ExpressivePalette palette) {
+  final l = AppLocalizations.of(c);
+  return switch (palette) {
+    ExpressivePalette.edge => l?.settingsPaletteEdge ?? 'Edge',
+    ExpressivePalette.matteLime => l?.settingsPaletteMatteLime ?? 'Matte lime',
+    ExpressivePalette.electricViolet =>
+      l?.settingsPaletteElectricViolet ?? 'Electric violet',
+    ExpressivePalette.freshMint => l?.settingsPaletteFreshMint ?? 'Fresh mint',
+    ExpressivePalette.warmAmber => l?.settingsPaletteWarmAmber ?? 'Warm amber',
+  };
+}
+
+/// Preview the shared surface and metric tokens at the current brightness.
+class ExpressivePalettePicker extends StatelessWidget {
+  final ExpressivePalette chosen;
+  final ValueChanged<ExpressivePalette> onPick;
+
+  const ExpressivePalettePicker(
+      {super.key, required this.chosen, required this.onPick});
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final l = AppLocalizations.of(c);
+    return SafeArea(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(S.x4, S.x2, S.x4, S.x6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(l?.settingsPaletteTitle ?? 'Colour palette',
+                style: F.t2.copyWith(color: p.ink)),
+            const SizedBox(height: S.x2),
+            Text(l?.settingsPaletteHint ??
+                'Try a different set of colours. Each palette works in light '
+                    'and dark mode.',
+                style: F.cap.copyWith(color: p.ink2)),
+            const SizedBox(height: S.x4),
+            for (final palette in ExpressivePalette.values) ...[
+              if (palette != ExpressivePalette.values.first)
+                const SizedBox(height: S.x3),
+              Semantics(
+                selected: palette == chosen,
+                child: Surface(
+                  onTap: () => onPick(palette),
+                  color: palette == chosen ? p.wash(C.purple) : p.card2,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Icon(palette == chosen ? LucideIcons.circleCheck :
+                            LucideIcons.circle, size: S.x6,
+                            color: palette == chosen ? p.on(C.purple) : p.ink3),
+                        const SizedBox(width: S.x3),
+                        Expanded(child: Text(expressivePaletteLabel(c, palette),
+                            style: F.head.copyWith(color: p.ink))),
+                      ]),
+                      const SizedBox(height: S.x3),
+                      ExcludeSemantics(child: _PaletteSwatches(
+                          P(p.dark, expressive: true, palette: palette))),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PaletteSwatches extends StatelessWidget {
+  final P palette;
+  const _PaletteSwatches(this.palette);
+
+  @override
+  Widget build(BuildContext c) => Container(
+    padding: const EdgeInsets.all(S.x2),
+    decoration: BoxDecoration(color: palette.bg, borderRadius: R.rPill),
+    child: Row(mainAxisSize: MainAxisSize.min, children: [
+      for (final color in [palette.card2, palette.on(C.green),
+          palette.on(C.blue), palette.on(C.purple)])
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: S.x1),
+          child: Container(width: S.x6, height: S.x6,
+              decoration: BoxDecoration(color: color, shape: BoxShape.circle)),
+        ),
+    ]),
+  );
 }
 
 class MoreSettingsView extends StatelessWidget {
   final String units, appearance;
+  final InterfaceStyle interfaceStyle;
+  final VoidCallback? onPickInterfaceStyle;
+  final ExpressivePalette palette;
+  final VoidCallback? onPickPalette;
 
   /// 12- or 24-hour clock, or whatever the OS says ("System", the default).
   final ClockFormat clockFormat;
   final bool phoneSteps, telemetry, barcodeLookup, cycleTracking;
+  final bool homeAiBriefing;
 
   /// The live-workout HR-zone-crossing haptic. Off by default; [zoneAlertZone]
   /// (1..5) is only meaningful — and only drawn — while this is on.
@@ -536,6 +816,7 @@ class MoreSettingsView extends StatelessWidget {
   final bool devMode;
 
   final VoidCallback? onVersionTap, onToggleDev, onGallery;
+  final Future<void> Function(DetailOpener, Widget)? onNavigate;
 
   final VoidCallback? onEditProfile,
       onAlarm,
@@ -549,6 +830,7 @@ class MoreSettingsView extends StatelessWidget {
       onToggleTelemetry,
       onToggleBarcodeLookup,
       onToggleCycleTracking,
+      onToggleHomeAiBriefing,
       onToggleHealthShare,
       onToggleHealthSync,
       onToggleUpdateChecks,
@@ -560,6 +842,10 @@ class MoreSettingsView extends StatelessWidget {
     super.key,
     this.units = 'Metric',
     this.appearance = 'System',
+    this.interfaceStyle = InterfaceStyle.original,
+    this.onPickInterfaceStyle,
+    this.palette = ExpressivePalette.edge,
+    this.onPickPalette,
     this.clockFormat = ClockFormat.system,
     this.appIcon,
     this.onPickIcon,
@@ -570,6 +856,7 @@ class MoreSettingsView extends StatelessWidget {
     this.telemetry = false,
     this.barcodeLookup = true,
     this.cycleTracking = false,
+    this.homeAiBriefing = true,
     this.zoneAlertEnabled = false,
     this.zoneAlertZone = 3,
     this.showHealthShare = false,
@@ -583,6 +870,7 @@ class MoreSettingsView extends StatelessWidget {
     this.onVersionTap,
     this.onToggleDev,
     this.onGallery,
+    this.onNavigate,
     this.onEditProfile,
     this.onAlarm,
     this.onNotifications,
@@ -595,6 +883,7 @@ class MoreSettingsView extends StatelessWidget {
     this.onToggleTelemetry,
     this.onToggleBarcodeLookup,
     this.onToggleCycleTracking,
+    this.onToggleHomeAiBriefing,
     this.onToggleHealthShare,
     this.onToggleHealthSync,
     this.onToggleUpdateChecks,
@@ -629,7 +918,9 @@ class MoreSettingsView extends StatelessWidget {
                       l?.settingsAlarmRowTitle ?? 'Alarm',
                       sub: l?.settingsAlarmRowSub ??
                           'Buzzes on your wrist, on the band’s own clock',
-                      onTap: onAlarm),
+                      onTap: onNavigate == null ? onAlarm : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const AlarmScreen())),
                   // Off by default — an existing user did not ask their band
                   // to start buzzing mid-workout. The target-zone row below
                   // only appears once this is on; a target for an alert
@@ -674,15 +965,26 @@ class MoreSettingsView extends StatelessWidget {
                       sub: l?.settingsManageNotificationsRowSub ??
                           'What may interrupt you, quiet hours, and off '
                               'switches for all of them',
-                      onTap: onNotifications),
+                      onTap: onNavigate == null ? onNotifications : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const NotificationSettings())),
                 ]),
                 settingsGroup(c, l?.settingsGroupPreferences ?? 'Preferences', [
                   SetRow(LucideIcons.ruler, C.blue,
                       l?.settingsUnitsRowTitle ?? 'Units',
-                      value: units, onTap: onCycleUnits),
+                      value: l?.unitSystemName(units == 'Metric' ? 'metric' : units == 'Imperial' ? 'imperial' : '', units) ?? units, onTap: onCycleUnits),
                   SetRow(LucideIcons.sun, C.yellow,
                       l?.settingsAppearanceRowTitle ?? 'Appearance',
                       value: appearance, onTap: onCycleAppearance),
+                  SetRow(LucideIcons.palette, C.purple,
+                      l?.settingsInterfaceStyleTitle ?? 'Interface style',
+                      value: interfaceStyleLabel(c, interfaceStyle),
+                      onTap: onPickInterfaceStyle),
+                  if (interfaceStyle == InterfaceStyle.expressive)
+                    SetRow(LucideIcons.swatchBook, C.green,
+                        l?.settingsPaletteTitle ?? 'Colour palette',
+                        value: expressivePaletteLabel(c, palette),
+                        onTap: onPickPalette),
                   SetRow(LucideIcons.clock, C.teal,
                       l?.settingsClockFormatRowTitle ?? 'Time format',
                       value: switch (clockFormat) {
@@ -696,6 +998,12 @@ class MoreSettingsView extends StatelessWidget {
                       onTap: onCycleClockFormat),
                   if (appIcon != null)
                     _IconRow(chosen: appIcon!, onPick: onPickIcon),
+                  SetRow(LucideIcons.sparkles, C.coach,
+                      l?.settingsHomeAiBriefingTitle ?? 'AI briefing on Home',
+                      sub: l?.settingsHomeAiBriefingSub ??
+                          'Show the card on Home. Hiding it keeps saved briefings',
+                      value: homeAiBriefing ? on : off,
+                      onTap: onToggleHomeAiBriefing),
                   // Opt-in, and it says what it does rather than what it is
                   // about — "Cycle tracking" alone leaves you guessing whether
                   // switching it off throws the entries away.
@@ -713,7 +1021,9 @@ class MoreSettingsView extends StatelessWidget {
                           'Export, backup, import',
                       sub: l?.settingsExportBackupImportRowSub ??
                           'Spreadsheets, a full copy, and bringing history in',
-                      onTap: onData),
+                      onTap: onNavigate == null ? onData : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const DataScreen())),
                   // The row P1 was missing. Everything behind it — the
                   // permission request, the retry/backoff, the four gates —
                   // was already written and simply had no way to be switched
@@ -738,7 +1048,7 @@ class MoreSettingsView extends StatelessWidget {
                           sub: AppLocalizations.of(c)
                                   ?.settingsDoubleTapRowSub ??
                               'What a double-tap on the band does',
-                          onTap: () => goto(c, const BandGestures()))),
+                          destination: const BandGestures())),
                   SetRow(LucideIcons.workflow, C.indigo,
                       l?.settingsTaskerShortcutsRowTitle ??
                           'Tasker and Shortcuts',
@@ -748,7 +1058,9 @@ class MoreSettingsView extends StatelessWidget {
                       sub: l?.settingsTaskerShortcutsRowSub ??
                           'Android only for events out. iOS can buzz the band '
                               'but cannot be triggered by it',
-                      onTap: onAutomation),
+                      onTap: onNavigate == null ? onAutomation : null,
+                      onNavigate: onNavigate == null ? null
+                          : (open) => onNavigate!(open, const AutomationSettings())),
                 ]),
                 settingsGroup(c, l?.settingsGroupPrivacy ?? 'Privacy', [
                   SetRow(LucideIcons.bug, C.orange,
@@ -820,7 +1132,9 @@ class MoreSettingsView extends StatelessWidget {
                         sub: l?.settingsComponentGalleryRowSub ??
                             'Every component, at any text scale, in either '
                                 'theme',
-                        onTap: onGallery),
+                        onTap: onNavigate == null ? onGallery : null,
+                        onNavigate: onNavigate == null ? null
+                            : (open) => onNavigate!(open, const GalleryScreen())),
                     SetRow(LucideIcons.code, C.n500,
                         l?.settingsDeveloperModeRowTitle ?? 'Developer mode',
                         value: on, chevron: false, onTap: onToggleDev),
@@ -1201,7 +1515,7 @@ class NotificationSettingsView extends StatelessWidget {
                               'Buzz on app notifications',
                           sub: l?.settingsBuzzOnAppNotificationsRowSub ??
                               'Pick which phone apps make the strap buzz',
-                          onTap: () => goto(c, const BandNotifications())),
+                          destination: const BandNotifications()),
                     ]),
                   settingsGroup(c, l?.settingsGroupQuietHours ?? 'Quiet hours', [
                     SetRow(LucideIcons.moon, C.indigo,
@@ -1516,8 +1830,8 @@ class _EditProfileViewState extends State<EditProfileView> {
     final weight = Typed.of(_weight.text);
     final bad = [
       if (age.bad) (l?.settingsAgeFieldLabel ?? 'Age'),
-      if (height.bad) _u.heightLabel,
-      if (weight.bad) _u.weightLabel,
+      if (height.bad) _u.localizedHeightLabel(AppLocalizations.of(context)),
+      if (weight.bad) _u.localizedWeightLabel(AppLocalizations.of(context)),
     ];
     if (bad.isNotEmpty) {
       sayUnreadable(context, bad);
@@ -1591,10 +1905,10 @@ class _EditProfileViewState extends State<EditProfileView> {
                 _text(c, _age, l?.settingsAgeYearsFieldLabel ?? 'AGE (YEARS)',
                     TextInputType.number),
                 const SizedBox(height: S.x4),
-                _text(c, _height, _u.heightLabel.toUpperCase(),
+                _text(c, _height, _u.localizedHeightLabel(AppLocalizations.of(context)).toUpperCase(),
                     TextInputType.number),
                 const SizedBox(height: S.x4),
-                _text(c, _weight, _u.weightLabel.toUpperCase(),
+                _text(c, _weight, _u.localizedWeightLabel(AppLocalizations.of(context)).toUpperCase(),
                     TextInputType.number),
                 ..._importBlock(p, c),
                 const SizedBox(height: S.x6),

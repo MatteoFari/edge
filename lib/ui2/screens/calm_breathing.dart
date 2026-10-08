@@ -722,7 +722,7 @@ class _Setup extends StatelessWidget {
                           padding: const EdgeInsets.symmetric(vertical: S.x3),
                           decoration: BoxDecoration(
                             color: m == minutes ? p.fill(C.domMind) : p.card,
-                            borderRadius: R.rMd,
+                            borderRadius: R.controlOf(c),
                           ),
                           child: Center(
                             child: Text(
@@ -1085,6 +1085,7 @@ class _Result extends StatelessWidget {
     final absent = StatusCard.forMetric(
       l?.calmBreathingNoScoreForSession ?? 'No coherence score for this session',
       m,
+      l: l,
       why: !rated
           ? (l?.calmBreathingPatternNotScored(app.breathingPattern.label) ??
               '${app.breathingPattern.label} is not scored. Resonance is the '

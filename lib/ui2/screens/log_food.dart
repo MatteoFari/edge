@@ -351,7 +351,7 @@ class _LogFoodSheetState extends State<LogFoodSheet> {
                         padding: const EdgeInsets.symmetric(vertical: S.x3),
                         decoration: BoxDecoration(
                           color: m == _meal ? p.fill(C.domFood) : p.card2,
-                          borderRadius: R.rSm,
+                          borderRadius: p.expressive ? R.rPill : R.rSm,
                         ),
                         child: Center(
                           child: Text(
@@ -746,7 +746,10 @@ class FoodRow extends StatelessWidget {
             Container(
               width: 34,
               height: 34,
-              decoration: BoxDecoration(color: p.card2, borderRadius: R.rSm),
+              decoration: BoxDecoration(
+                color: p.card2,
+                borderRadius: p.expressive ? R.rPill : R.rSm,
+              ),
               child: Icon(LucideIcons.utensils, size: 16, color: p.ink3),
             ),
             const SizedBox(width: S.x3),

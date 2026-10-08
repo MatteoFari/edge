@@ -108,7 +108,7 @@ void main() {
           'efficiency': 0.91, // 0..1 from the store → *100 in the snapshot
           'deep_min': 78,
           'rem_min': 96,
-          'debt_min': 35,
+          'target_shortfall_min': 35,
         },
       );
       final inp = await collectBriefingInputs(repo, BriefingPeriod.morning);
@@ -117,6 +117,8 @@ void main() {
       expect(inp['hrv_rmssd'], 61.2);
       expect(inp['sleep_min'], 445);
       expect(inp['sleep_efficiency_pct'], 91);
+      expect(inp['sleep_target_shortfall_min'], 35);
+      expect(inp.containsKey('sleep_debt_min'), isFalse);
       expect(inp['deep_min'], 78);
       // Evening-only metrics never leak into a morning snapshot.
       expect(inp.containsKey('strain_0_21'), isFalse);
@@ -173,6 +175,23 @@ void main() {
       final inp = await collectBriefingInputs(repo, BriefingPeriod.morning);
       expect(inp.containsKey('readiness'), isFalse);
       expect(inp.containsKey('sleep_min'), isFalse);
+    });
+
+    test('sleep target shortfall has no legacy sleep-debt fallback', () async {
+      final inp = await collectBriefingInputs(
+        _FakeRepo(daySleep: {
+          'has_sleep': true,
+          'duration_min': 445,
+          'debt_min': 35,
+        }),
+        BriefingPeriod.morning,
+      );
+      expect(inp.containsKey('sleep_target_shortfall_min'), isFalse);
+      expect(inp.containsKey('sleep_debt_min'), isFalse);
+      expect(inp[kWithheldKey], contains('sleep_target_shortfall_min'));
+      final prompt = briefingSystemPrompt(BriefingPeriod.morning);
+      expect(prompt, contains('minutes below a pre-sleep planning target'));
+      expect(prompt, contains('does not measure biological sleep need'));
     });
   });
 

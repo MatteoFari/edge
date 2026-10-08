@@ -127,7 +127,7 @@ class _ActivitySetupState extends State<ActivitySetup> {
         child: Column(children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: S.x4),
-            child: NavBar(a.name),
+            child: NavBar(a.label(l)),
           ),
           Expanded(
             child: ListView(
@@ -143,7 +143,7 @@ class _ActivitySetupState extends State<ActivitySetup> {
                       child: Icon(a.icon, size: 38, color: p.on(a.color)),
                     ),
                     const SizedBox(height: S.x4),
-                    Text(a.name, style: F.t2.copyWith(color: p.ink)),
+                    Text(a.label(AppLocalizations.of(c)), style: F.t2.copyWith(color: p.ink)),
                     const SizedBox(height: S.x1),
                     Text(_trackLabel(a.track, l),
                         textAlign: TextAlign.center,

@@ -496,7 +496,6 @@ void main() {
       final when = DateTime(2026, 8, 9, 19, 0, 0);
       final dest = File(p.join(dir.path, backupFileName(when)));
       final staging = File('${dest.path}$kBackupStagingSuffix');
-      staging.writeAsStringSync('a previous attempt got this far');
 
       final unreadable = Directory(p.join(tmp.path, 'not-a-snapshot'))
         ..createSync();

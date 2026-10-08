@@ -27,7 +27,7 @@ import '../../l10n/app_localizations.dart';
 import '../../models/metric.dart';
 import '../ui2.dart';
 import 'home_screen.dart';
-import 'metric_detail.dart';
+import 'sleep_detail.dart';
 
 /// How many nights the actogram draws. Each night costs one day-bundle decode,
 /// so this is a real cost, not a display choice.
@@ -41,6 +41,8 @@ class CircadianData {
   /// null when that night has no window.
   final List<List<double>?> actogram;
   final List<String> labels;
+  final String? updatedDay;
+  final Map<String, dynamic>? stale;
   final Metric jetlag, regularity;
 
   /// Chronotype is a CLASS, not a number — a label, never a value.
@@ -83,6 +85,8 @@ class CircadianData {
   const CircadianData({
     this.actogram = const [],
     this.labels = const [],
+    this.updatedDay,
+    this.stale,
     this.jetlag = Metric.empty,
     this.regularity = Metric.empty,
     this.chronotypeLabel = '',
@@ -205,6 +209,15 @@ class CircadianData {
     return CircadianData(
       actogram: cols,
       labels: labels,
+      updatedDay: cd['built_at_epoch'] is num &&
+              (cd['built_at_epoch'] as num).isFinite &&
+              (cd['built_at_epoch'] as num) > 0
+          ? dayLabelOf(DateTime.fromMillisecondsSinceEpoch(
+              (cd['built_at_epoch'] as num).round() * 1000))
+          : null,
+      stale: cd['stale'] is Map
+          ? (cd['stale'] as Map).cast<String, dynamic>()
+          : null,
       alertness: ana.alertnessForecast(
         wakeLocalHour:
             wakeLocal == null ? null : wakeLocal.hour + wakeLocal.minute / 60.0,
@@ -264,24 +277,36 @@ String _hourClock(num? h) => h == null ? '' : clock(((h % 24) * 60).round());
 /// `'YYYY-MM-DD'` → `'9 Aug'`. Built off [prettyDay] rather than a second month
 /// table: two dates spelled "Saturday, 9 August" do not fit one table row, and
 /// this screen's own actogram axis already prints bare dates.
-String _shortDay(Object? day) {
-  final parts = prettyDay(day?.toString()).split(', ');
+String _shortDay(Object? day, AppLocalizations? l) {
+  final parts = prettyDay(day?.toString(), l).split(', ');
   if (parts.length < 2) return '';
   final dm = parts.last.split(' ');
   return dm.length < 2 ? parts.last : '${dm[0]} ${dm[1].substring(0, 3)}';
 }
 
-class CircadianDetail extends StatefulWidget {
+/// Existing Body clock links keep working, now inside Sleep's shared route.
+class CircadianDetail extends StatelessWidget {
   final CircadianData? data;
   const CircadianDetail({super.key, this.data});
 
   @override
-  State<CircadianDetail> createState() => _CircadianDetailState();
+  Widget build(BuildContext context) =>
+      SleepDetail(initialTab: SleepDetailTab.bodyClock, circadianData: data);
 }
 
-class _CircadianDetailState extends State<CircadianDetail> {
+class CircadianTab extends StatefulWidget {
+  final CircadianData? data;
+  final bool active;
+  const CircadianTab({super.key, this.data, this.active = true});
+
+  @override
+  State<CircadianTab> createState() => _CircadianTabState();
+}
+
+class _CircadianTabState extends State<CircadianTab> with RevisionReload {
   CircadianData? _d;
   bool _loading = true;
+  bool _loadError = false;
 
   /// Whether the non-parametric battery is unfolded. Off by default.
   bool _showStrength = false;
@@ -299,20 +324,45 @@ class _CircadianDetailState extends State<CircadianDetail> {
       _loading = false;
       return;
     }
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    if (widget.active) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
+  }
+
+  @override
+  bool get revisionReloads => widget.data == null;
+
+  @override
+  void didUpdateWidget(CircadianTab oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.active && !hasRead(#bodyClock) && widget.data == null) _load();
+  }
+
+  @override
+  void reload() {
+    if (hasRead(#bodyClock)) _load();
   }
 
   Future<void> _load() async {
+    if (!mounted) return;
+    final t = beginRead(#bodyClock);
+    setState(() => (_loading = true, _loadError = false));
     final repo = repoOf(context);
     if (repo == null) {
-      if (mounted) setState(() => _loading = false);
+      setState(() => (_loading = false, _loadError = true));
       return;
     }
     try {
       final d = await CircadianData.load(repo);
-      if (mounted) setState(() => (_d = d, _loading = false));
+      if (stillNewest(#bodyClock, t)) {
+        setState(() => (_d = d, _loading = false));
+      }
     } catch (_) {
-      if (mounted) setState(() => _loading = false);
+      if (stillNewest(#bodyClock, t)) {
+        setState(() => (_loading = false, _loadError = true));
+      }
     }
   }
 
@@ -323,92 +373,143 @@ class _CircadianDetailState extends State<CircadianDetail> {
     final d = _d ?? const CircadianData();
     final drawn = d.actogram.where((e) => e != null).length;
 
-    return detailScaffold(c, l?.circadianDetailTitle ?? 'Body clock', [
-      if (_loading && _d == null) ...[
-        const SizedBox(height: S.x8),
-        const Center(child: CircularProgressIndicator()),
-      ] else ...[
-        if (drawn == 0)
+    return ListView(
+      key: const PageStorageKey('sleep-body-clock'),
+      padding: const EdgeInsets.fromLTRB(S.x4, 0, S.x4, S.x12),
+      children: [
+        if (_loadError)
           StatusCard(
-            l?.circadianDetailNoNightsTitle ?? 'No nights to plot yet',
-            l?.circadianDetailNoNightsBody ?? '0 nights scored.',
-            fix: l?.circadianDetailNoNightsFix ?? 'Wear the band overnight',
-            icon: LucideIcons.calendarClock,
+            l?.healthCouldNotRead(l.circadianDetailTitle) ??
+                'Could not read your body clock',
+            l?.healthReadFailedBody ?? 'The stored rows failed to load.',
+            fix: l?.healthTryAgain ?? 'Try again',
+            icon: LucideIcons.refreshCw,
+            onFix: _load,
           )
-        else
-          Surface(
-            child: ChartFrame(
-              title: l?.circadianDetailSleepTitle ?? 'Sleep, night by night',
-              // Hour of day is what the vertical axis IS. The old card replaced
-              // the axis with a sentence describing it.
-              unit: 'hour of day',
-              height: 190,
-              yAxis: AxisSpec(
+        else if (_loading && _d == null) ...[
+          const SizedBox(height: S.x8),
+          const Center(child: CircularProgressIndicator()),
+        ] else ...[
+          Text(
+            l?.sleepBodyClockCurrentSummary ??
+                'Recent history, not a measurement of the selected night.',
+            style: F.cap.copyWith(color: p.ink2),
+          ),
+          const SizedBox(height: S.x2),
+          if (d.labels.isNotEmpty) ...[
+            Text(
+              l?.sleepBodyClockHistoryRange(
+                    prettyDay(d.labels.first, l),
+                    prettyDay(d.labels.last, l),
+                  ) ??
+                  'History: ${prettyDay(d.labels.first, l)} – '
+                      '${prettyDay(d.labels.last, l)}',
+              style: F.cap.copyWith(color: p.ink3),
+            ),
+            const SizedBox(height: S.x1),
+          ],
+          Text(
+            d.updatedDay == null
+                ? (l?.sleepBodyClockUpdateUnknown ?? 'Update date unavailable')
+                : (l?.sleepBodyClockUpdated(prettyDay(d.updatedDay, l)) ??
+                      'Summary updated ${prettyDay(d.updatedDay, l)}'),
+            style: F.cap.copyWith(color: p.ink3),
+          ),
+          if (_loading) ...[
+            const SizedBox(height: S.x2),
+            const LinearProgressIndicator(),
+          ],
+          const SizedBox(height: S.x4),
+          if (staleInsightsCard(d.stale, syncOf(c), l) case final status?) ...[
+            status,
+            const SizedBox(height: S.x3),
+          ],
+          if (drawn == 0)
+            StatusCard(
+              l?.circadianDetailNoNightsTitle ?? 'No nights to plot yet',
+              l?.circadianDetailNoNightsBody ?? '0 nights scored.',
+              fix: l?.circadianDetailNoNightsFix ?? 'Wear the band overnight',
+              icon: LucideIcons.calendarClock,
+            )
+          else
+            Surface(
+              child: ChartFrame(
+                title: l?.circadianDetailSleepTitle ?? 'Sleep, night by night',
+                // Hour of day is what the vertical axis IS. The old card replaced
+                // the axis with a sentence describing it.
+                unit: 'hour of day',
+                height: 190,
+                yAxis: AxisSpec(
                   min: 0,
                   max: 24,
                   ticks: 3,
                   // Rows run noon → noon, so 0 and 24 are both midday and 12 is
                   // midnight — read straight off the anchor the columns use.
-                  format: (v) => clock(((12 + v) * 60).round())),
-              xLabels: d.labels.isEmpty
-                  ? const []
-                  : [d.labels.first, d.labels.last],
-              legend: [(l?.circadianDetailAsleep ?? 'Asleep', C.indigo)],
-              footnote: l?.circadianDetailSleepFootnote(drawn) ??
-                  '$drawn night${drawn == 1 ? '' : 's'}, one column each. '
-                      'Darker is more of that hour asleep.',
-              child: CustomPaint(
-                size: Size.infinite,
-                painter: Actogram(d.actogram, p.on(C.indigo)),
+                  format: (v) => clock(((12 + v) * 60).round()),
+                ),
+                xLabels: d.labels.isEmpty
+                    ? const []
+                    : [d.labels.first, d.labels.last],
+                legend: [(l?.circadianDetailAsleep ?? 'Asleep', C.indigo)],
+                footnote:
+                    l?.circadianDetailSleepFootnote(drawn) ??
+                    '$drawn night${drawn == 1 ? '' : 's'}, one column each. '
+                        'Darker is more of that hour asleep.',
+                child: CustomPaint(
+                  size: Size.infinite,
+                  painter: Actogram(d.actogram, p.on(C.indigo)),
+                ),
               ),
             ),
+
+          // SLP-08 rides in this section's action, so the screen gains a tap
+          // rather than two permanent rows.
+          Section(
+            l?.circadianDetailYourRhythm ?? 'Your rhythm',
+            _rhythm(c, p, d),
+            action: d.sriPairs.isEmpty || d.regularity.value == null
+                ? null
+                : (_showNights
+                      ? (l?.circadianDetailHide ?? 'Hide')
+                      : (l?.circadianDetailWhichNights ?? 'Which nights')),
+            onAction: d.sriPairs.isEmpty || d.regularity.value == null
+                ? null
+                : () => setState(() => _showNights = !_showNights),
           ),
 
-        // SLP-08 rides in this section's action, so the screen gains a tap
-        // rather than two permanent rows.
-        Section(
-          l?.circadianDetailYourRhythm ?? 'Your rhythm',
-          _rhythm(c, p, d),
-          action: d.sriPairs.isEmpty || d.regularity.value == null
-              ? null
-              : (_showNights
-                  ? (l?.circadianDetailHide ?? 'Hide')
-                  : (l?.circadianDetailWhichNights ?? 'Which nights')),
-          onAction: d.sriPairs.isEmpty || d.regularity.value == null
-              ? null
-              : () => setState(() => _showNights = !_showNights),
-        ),
+          // MIND-11 sits directly under the measured rhythm because it is built
+          // on it — and directly above the battery it borrows the acrophase from.
+          if (_forecast(c, p, d) case final f?)
+            Section(l?.circadianDetailTodayPredicted ?? 'Today, predicted', f),
 
-        // MIND-11 sits directly under the measured rhythm because it is built
-        // on it — and directly above the battery it borrows the acrophase from.
-        if (_forecast(c, p, d) case final f?)
-          Section(l?.circadianDetailTodayPredicted ?? 'Today, predicted', f),
+          // COLLAPSED BY DEFAULT, and that is how the screen paid for the card
+          // above. Interdaily stability, intradaily variability, relative
+          // amplitude and an adjusted R² are density-3 numbers that were sitting
+          // at density 2 with eight rows and no tap between them and the reader.
+          // Nothing is lost: the section, its title and its own empty state are
+          // unchanged one tap away.
+          Section(
+            l?.circadianDetailRhythmStrength ?? 'Rhythm strength',
+            _showStrength ? _strength(c, p, d) : const SizedBox.shrink(),
+            action: _showStrength
+                ? (l?.circadianDetailHide ?? 'Hide')
+                : (l?.circadianDetailShow ?? 'Show'),
+            onAction: () => setState(() => _showStrength = !_showStrength),
+          ),
 
-        // COLLAPSED BY DEFAULT, and that is how the screen paid for the card
-        // above. Interdaily stability, intradaily variability, relative
-        // amplitude and an adjusted R² are density-3 numbers that were sitting
-        // at density 2 with eight rows and no tap between them and the reader.
-        // Nothing is lost: the section, its title and its own empty state are
-        // unchanged one tap away.
-        Section(
-          l?.circadianDetailRhythmStrength ?? 'Rhythm strength',
-          _showStrength ? _strength(c, p, d) : const SizedBox.shrink(),
-          action: _showStrength
-              ? (l?.circadianDetailHide ?? 'Hide')
-              : (l?.circadianDetailShow ?? 'Show'),
-          onAction: () => setState(() => _showStrength = !_showStrength),
-        ),
-
-        // The social-jetlag InsightCard that used to sit here restated three
-        // rows of the table above it as a sentence. Its one extra fact — the
-        // DIRECTION, which is the sign of free minus work and not the unsigned
-        // magnitude the card used to assert "later" from — is on the Social
-        // jetlag row itself now, and the night counts are beside it. One card
-        // off, so the hourly row below can go on.
-        Section(l?.circadianDetailWhenStill ?? 'When you are still',
-            _stillness(c, p, d)),
+          // The social-jetlag InsightCard that used to sit here restated three
+          // rows of the table above it as a sentence. Its one extra fact — the
+          // DIRECTION, which is the sign of free minus work and not the unsigned
+          // magnitude the card used to assert "later" from — is on the Social
+          // jetlag row itself now, and the night counts are beside it. One card
+          // off, so the hourly row below can go on.
+          Section(
+            l?.circadianDetailWhenStill ?? 'When you are still',
+            _stillness(c, p, d),
+          ),
+        ],
       ],
-    ]);
+    );
   }
 
   String _hm(num hours) {
@@ -565,7 +666,7 @@ class _CircadianDetailState extends State<CircadianDetail> {
     final showNights = _showNights && worst != null;
     final rows = <(String, String)>[
       if (d.chronotypeLabel.isNotEmpty)
-        (l?.circadianDetailChronotype ?? 'Chronotype', d.chronotypeLabel),
+        (l?.circadianDetailChronotype ?? 'Chronotype', l?.bodyClockChronotype(d.chronotypeLabel.toLowerCase().replaceAll(' ', '_'), d.chronotypeLabel) ?? d.chronotypeLabel),
       if (d.midFreeH != null)
         (l?.circadianDetailMidSleepFree ?? 'Mid-sleep, free days',
             _hourClock(d.midFreeH)),
@@ -592,7 +693,7 @@ class _CircadianDetailState extends State<CircadianDetail> {
       // name the pair that agreed least and print it on the same scale.
       if (showNights)
         (l?.circadianDetailNightsLeastAlike ?? 'Nights least alike',
-            '${_shortDay(worst['prev_date'])} → ${_shortDay(worst['date'])}'),
+            '${_shortDay(worst['prev_date'], l)} → ${_shortDay(worst['date'], l)}'),
       if (showNights)
         (l?.circadianDetailSamePairScale ?? 'That pair, same scale',
             '${(worst['sri'] as num).round()} / 100'),
@@ -605,7 +706,7 @@ class _CircadianDetailState extends State<CircadianDetail> {
       return StatusCard.forMetric(
               l?.circadianDetailRhythmNotEstablished ??
                   'Your rhythm is not established yet',
-              d.regularity) ??
+              d.regularity, l: l) ??
           const SizedBox.shrink();
     }
 
@@ -670,6 +771,7 @@ class _CircadianDetailState extends State<CircadianDetail> {
               l?.circadianDetailStrengthNotMeasured ??
                   'Rhythm strength is not measured yet',
               d.rhythm,
+              l: l,
               unit: 'days',
               why: l?.circadianDetailStrengthWhy ??
                   'Needs consecutive days with all 24 hours recorded.') ??

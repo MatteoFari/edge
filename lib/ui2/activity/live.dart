@@ -35,6 +35,7 @@ import '../../state/prefs.dart';
 import '../../state/units_controller.dart';
 import '../screens/home_screen.dart' show unitsOf;
 import '../charts.dart';
+import '../detail_transition.dart';
 import '../grammar.dart';
 import '../paint_activity.dart';
 import '../theme.dart';
@@ -130,6 +131,81 @@ class LiveFeed {
 }
 
 typedef LiveFeedSource = LiveFeed Function();
+
+/// The minimized session is a single, accessible route back to its live view.
+/// The caller owns its clock and session, just as it owns [LiveFeed].
+class LiveSessionCard extends StatelessWidget {
+  final Activity a;
+  final int elapsed;
+  final bool paused;
+  final Future<void> Function(DetailOpener) onNavigate;
+
+  const LiveSessionCard(this.a, {
+    super.key,
+    required this.elapsed,
+    required this.onNavigate,
+    this.paused = false,
+  });
+
+  @override
+  Widget build(BuildContext c) {
+    final p = P.of(c);
+    final state = paused
+        ? AppLocalizations.of(c)?.activityLivePausedLabel ?? 'Paused'
+        : null;
+    return Surface(
+      key: const ValueKey('live-session-card'),
+      elevation: 2,
+      pad: const EdgeInsets.symmetric(horizontal: S.x4, vertical: S.x3),
+      onNavigate: onNavigate,
+      semanticLabel: '${a.label(AppLocalizations.of(c))}, ${clock(elapsed)}${state == null ? '' : ', $state'}',
+      child: Row(children: [
+        Container(
+          width: S.tap,
+          height: S.tap,
+          decoration: BoxDecoration(color: p.wash(a.color), borderRadius: R.rPill),
+          child: Icon(a.icon, size: S.x6, color: p.on(a.color)),
+        ),
+        const SizedBox(width: S.x3),
+        Expanded(child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(a.label(AppLocalizations.of(c)), style: F.body.copyWith(color: p.ink, fontWeight: FontWeight.w600)),
+            const SizedBox(height: S.x1),
+            Wrap(spacing: S.x2, runSpacing: S.x1, children: [
+              _elapsedText(c, elapsed, F.n17.copyWith(color: p.on(a.color))),
+              if (state != null) Text(state, style: F.cap.copyWith(color: p.ink2)),
+            ]),
+          ],
+        )),
+        const SizedBox(width: S.x2),
+        Icon(LucideIcons.chevronUp, size: S.x5, color: p.ink3),
+      ]),
+    );
+  }
+}
+
+/// A large clock may wrap at its separators, but never clips its digits or
+/// reduces the user's text scale. Its spoken form remains one elapsed time.
+Widget _elapsedText(BuildContext c, int elapsed, TextStyle style) {
+  final value = clock(elapsed);
+  return LayoutBuilder(builder: (c, box) {
+    final text = TextPainter(
+      text: TextSpan(text: value, style: DefaultTextStyle.of(c).style.merge(style)),
+      textDirection: Directionality.of(c),
+      textScaler: MediaQuery.textScalerOf(c),
+      maxLines: 1,
+    )..layout();
+    final fits = text.width <= box.maxWidth;
+    text.dispose();
+    if (fits) return Text(value, style: style);
+    final parts = value.split(':');
+    return Semantics(label: value, child: ExcludeSemantics(child: Wrap(
+      children: [for (var i = 0; i < parts.length; i++)
+        Text('${parts[i]}${i < parts.length - 1 ? ':' : ''}', style: style)],
+    )));
+  });
+}
 
 /// Ends the session the app started: stops the live engine, persists what the
 /// user typed against the session id, and returns the result ENRICHED with
@@ -513,7 +589,7 @@ class LiveShellState extends State<LiveShell> {
     // Stopping twice would stop the app's session twice and save the strength
     // log twice; the second tap must do nothing at all.
     if (_finishing) return;
-    _finishing = true;
+    setState(() => _finishing = true);
     _t?.cancel();
     final draft = widget.result(elapsed);
     // The app writes the session, flushes the GPS tail and hands back what it
@@ -562,6 +638,9 @@ class LiveShellState extends State<LiveShell> {
       backgroundColor: p.bg,
       body: SafeArea(
         child: Column(children: [
+          if (isExpressive(c))
+            _expressiveHeader(c, p, l, a)
+          else
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: S.x5),
             child: Row(children: [
@@ -577,7 +656,7 @@ class LiveShellState extends State<LiveShell> {
               ),
               Expanded(
                 child: Column(children: [
-                  Text(a.name.toUpperCase(),
+                  Text(a.label(AppLocalizations.of(c)).toUpperCase(),
                       style: F.over.copyWith(color: p.on(a.color)),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis),
@@ -609,7 +688,12 @@ class LiveShellState extends State<LiveShell> {
                       ? null
                       : widget.body(bc, clock.value),
                   builder: (bc2, e, child) => ListView(
-                    padding: const EdgeInsets.fromLTRB(S.x5, 0, S.x5, S.x4),
+                    padding: EdgeInsets.fromLTRB(
+                      isExpressive(bc2) ? S.x4 : S.x5,
+                      isExpressive(bc2) ? S.x2 : 0,
+                      isExpressive(bc2) ? S.x4 : S.x5,
+                      S.x4,
+                    ),
                     children: [child ?? widget.body(bc2, e)],
                   ),
                 ),
@@ -621,6 +705,9 @@ class LiveShellState extends State<LiveShell> {
               padding: const EdgeInsets.symmetric(horizontal: S.x5),
               child: widget.footer!(c),
             ),
+          if (isExpressive(c))
+            _expressiveControls(c, l, a)
+          else
           Padding(
             padding: const EdgeInsets.fromLTRB(S.x5, S.x4, S.x5, S.x5),
             child: Row(children: [
@@ -634,15 +721,13 @@ class LiveShellState extends State<LiveShell> {
                   semanticLabel: paused
                       ? (l?.activityLiveResumeLabel ?? 'Resume')
                       : (l?.activityLivePauseLabel ?? 'Pause'),
-                  onTap: () => setState(() {
-                    paused = !paused;
-                    LiveDraft.current?.setPaused(paused);
-                  }),
+                  onTap: _togglePaused,
                   child: Container(
                     height: 60,
                     alignment: Alignment.center,
                     decoration: BoxDecoration(
-                        color: p.fill(a.color), borderRadius: R.rLg),
+                        color: p.fill(a.color),
+                        borderRadius: p.expressive ? R.rPill : R.rLg),
                     child: Icon(
                         paused ? LucideIcons.play : LucideIcons.pause,
                         size: 25,
@@ -658,6 +743,84 @@ class LiveShellState extends State<LiveShell> {
           ),
         ]),
       ),
+    );
+  }
+
+  void _togglePaused() {
+    if (_finishing) return;
+    setState(() {
+      paused = !paused;
+      LiveDraft.current?.setPaused(paused);
+    });
+  }
+
+  Widget _expressiveHeader(BuildContext c, P p, AppLocalizations? l, Activity a) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(horizontal: S.x4, vertical: S.x2),
+        child: Row(children: [
+          Container(
+            width: S.tap,
+            height: S.tap,
+            decoration: BoxDecoration(color: p.wash(a.color), borderRadius: R.rPill),
+            child: Icon(a.icon, size: S.x6, color: p.on(a.color)),
+          ),
+          const SizedBox(width: S.x3),
+          Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(a.label(AppLocalizations.of(c)), style: F.head.copyWith(color: p.ink)),
+              if (widget.subtitle.isNotEmpty)
+                Text(widget.subtitle, style: F.cap.copyWith(color: p.ink3)),
+              if (paused)
+                Text(l?.activityLivePausedLabel ?? 'Paused',
+                    style: F.cap.copyWith(color: p.on(C.yellow))),
+            ],
+          )),
+          if (widget.private) ...[
+            const SizedBox(width: S.x2),
+            Icon(LucideIcons.lock, size: S.x4, color: p.ink3),
+          ],
+          const SizedBox(width: S.x2),
+          Pressable(
+            semanticLabel: l?.activityLiveMinimiseLabel ?? 'Minimise',
+            onTap: () => Navigator.maybePop(c),
+            child: Icon(LucideIcons.chevronDown, size: S.x6, color: p.ink2),
+          ),
+        ]),
+      );
+
+  Widget _expressiveControls(BuildContext c, AppLocalizations? l, Activity a) {
+    final pause = AnimatedSwitcher(
+      duration: motion(c, Motion.base),
+      child: BigButton(
+        key: ValueKey(paused),
+        paused ? l?.activityLiveResumeLabel ?? 'Resume' : l?.activityLivePauseLabel ?? 'Pause',
+        icon: paused ? LucideIcons.play : LucideIcons.pause,
+        color: a.color,
+        onTap: _finishing ? null : _togglePaused,
+      ),
+    );
+    final stop = BigButton(
+      l?.activityLiveFinishSessionLabel ?? 'Finish session',
+      icon: LucideIcons.square,
+      color: C.red,
+      soft: true,
+      onTap: _finishing ? null : finish,
+    );
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(S.x4, S.x3, S.x4, S.x4),
+      child: bigText(c)
+          ? Column(mainAxisSize: MainAxisSize.min, children: [
+              pause, const SizedBox(height: S.x2), stop,
+            ])
+          : IntrinsicHeight(child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(child: pause),
+                const SizedBox(width: S.x3),
+                Expanded(child: stop),
+              ],
+            )),
     );
   }
 
@@ -786,6 +949,7 @@ class LiveHeart extends StatelessWidget {
   Widget build(BuildContext c) {
     final p = P.of(c);
     final l = AppLocalizations.of(c);
+    if (isExpressive(c)) return _expressive(c, p, l);
     if (feed.hr == null) {
       // One card used to cover both, and it told a user whose band had
       // dropped mid-session to adjust the fit of a band that was not there.
@@ -845,6 +1009,69 @@ class LiveHeart extends StatelessWidget {
           child: CustomPaint(
               size: Size.infinite,
               painter: ZoneBar(_fractions(feed.zoneMinutes), p)),
+        ),
+      ],
+    ]);
+  }
+
+  Widget _expressive(BuildContext c, P p, AppLocalizations? l) {
+    // The minute curve keeps its gaps and time base. A live reading is never
+    // substituted for a missing recorded minute or used as its average.
+    final axis = AxisSpec.of(feed.hrCurve.whereType<double>());
+    final zones = feed.zoneMinutes;
+    final hasZones = zones.length == 5 && zones.every((v) => v.isFinite && v >= 0);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      Surface(
+        key: const ValueKey('live-heart-card'),
+        elevation: 0,
+        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+          if (feed.hr == null)
+            feed.bandConnected
+                ? StatusCard(l?.activityLiveNoHrYetTitle ?? 'No heart rate yet',
+                    l?.activityLiveNoHrYetBody ?? 'The band is connected but has not reported a beat.')
+                : StatusCard(l?.activityLiveNoHrTitle ?? 'No heart rate',
+                    l?.activityLiveNoHrBody ?? 'The band is not connected, so nothing is arriving for this session.')
+          else
+            Wrap(spacing: S.x2, runSpacing: S.x2,
+              crossAxisAlignment: WrapCrossAlignment.center, children: [
+                Icon(LucideIcons.heartPulse, size: S.x6, color: p.on(C.red)),
+                Text('${feed.hr}', style: F.n34.copyWith(color: p.ink)),
+                Text(l?.activityLiveBpmUnit ?? 'bpm', style: F.cap.copyWith(color: p.ink3)),
+                if (feed.zone case final z? when z >= 1 && z <= 5)
+                  Pill(l?.activityLiveZoneLabel(z) ?? 'Zone $z', ZoneBar.pigment[z - 1]),
+              ]),
+          if (axis != null) ...[
+            const SizedBox(height: S.x4),
+            ChartFrame(
+              title: l?.activitySummaryHeartRateTitle ?? 'HEART RATE',
+              unit: l?.activityLiveBpmUnit ?? 'bpm',
+              height: S.x16 * 2,
+              yAxis: axis,
+              xLabels: [clock(0), clock((feed.hrCurve.length - 1) * 60)],
+              series: feed.hrCurve,
+              child: RepaintBoundary(child: CustomPaint(size: Size.infinite,
+                painter: LineChart(feed.hrCurve, p.on(C.red), axis: axis, dotInk: p.card))),
+            ),
+          ],
+        ]),
+      ),
+      if (hasZones) ...[
+        const SizedBox(height: S.x3),
+        Surface(
+          key: const ValueKey('live-zone-card'),
+          elevation: 0,
+          child: ChartFrame(
+            title: l?.activityLiveTimeInZonesTitle ?? 'TIME IN ZONES',
+            unit: 'min',
+            height: S.x3,
+            legend: [for (var i = 0; i < 5; i++)
+              ('Z${i + 1} · ${zones[i].toStringAsFixed(1)} min', ZoneBar.cols(p)[i])],
+            child: ClipRRect(borderRadius: R.rPill, child: Container(
+              color: p.track,
+              child: RepaintBoundary(child: CustomPaint(size: Size.infinite,
+                painter: ZoneBar(_fractions(zones), p))),
+            )),
+          ),
         ),
       ],
     ]);
@@ -933,13 +1160,31 @@ List<Widget> _distanceStats(BuildContext ctx, P p, LiveFeed f, Activity a,
       ? null
       : UnitsController.formatPace(
           elapsed / (u == null ? meters / 1000 : u.distanceValue(meters)));
-  return [
-    statRow(p, [
+  final items = [
       if (value != null) (value.toStringAsFixed(2), unit),
       if (pacePerUnit != null) (pacePerUnit, '/$unit'),
       ..._commonStats(ctx, a, f, weightKg, elapsed),
-    ].take(3).toList()),
-  ];
+    ].take(3).toList();
+  if (items.isEmpty) return const [];
+  if (!isExpressive(ctx)) return [statRow(p, items)];
+  return [Surface(
+    elevation: 0,
+    child: LayoutBuilder(builder: (c, box) {
+      final columns = bigText(c) || box.maxWidth < S.x16 * 4 ? 1 : items.length;
+      final width = (box.maxWidth - S.x3 * (columns - 1)) / columns;
+      return Wrap(spacing: S.x3, runSpacing: S.x4, children: [
+        for (final item in items)
+          SizedBox(width: width, child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(item.$2, style: F.cap.copyWith(color: p.ink3)),
+              const SizedBox(height: S.x1),
+              Text(item.$1, style: F.n24.copyWith(color: p.ink)),
+            ],
+          )),
+      ]);
+    }),
+  )];
 }
 
 /// "5.24 km" / "3.25 mi" for a distance already known to exist.
@@ -1083,11 +1328,33 @@ class LiveMeasured extends StatelessWidget {
         final l = AppLocalizations.of(ctx);
         final f = feed?.call() ?? LiveFeed.none;
         return Column(children: [
+          if (isExpressive(ctx))
+            Surface(
+              key: const ValueKey('live-duration-card'),
+              elevation: 0,
+              color: p.wash(a.color),
+              pad: const EdgeInsets.all(S.x5),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(children: [
+                    Icon(LucideIcons.timer, size: S.x5, color: p.on(a.color)),
+                    const SizedBox(width: S.x2),
+                    Expanded(child: Text(l?.activitySummaryElapsedTime ?? 'Elapsed time',
+                        style: F.cap.copyWith(color: p.on(a.color)))),
+                  ]),
+                  const SizedBox(height: S.x3),
+                  _elapsedText(ctx, elapsed, F.n48.copyWith(color: p.ink)),
+                ],
+              ),
+            )
+          else ...[
           const SizedBox(height: S.x6),
           Text(l?.activityLiveDurationHeader ?? 'DURATION',
               style: F.over.copyWith(color: p.ink3)),
           const SizedBox(height: S.x3),
           bigNum(p, clock(elapsed), ''),
+          ],
           // Only once fixes are actually arriving. The catalogue's `gps` flag
           // says a route is WORTH recording, not that one is being recorded —
           // it claimed "GPS ACTIVE" with location denied.
@@ -1100,11 +1367,11 @@ class LiveMeasured extends StatelessWidget {
             const SizedBox(height: S.x4),
             card,
           ],
-          const SizedBox(height: S.x8),
+          SizedBox(height: isExpressive(ctx) ? S.x3 : S.x8),
           // The user's own unit system, not km hardcoded. `unitsOf` is null in
           // a golden, and the metric fallback there is what the store holds.
           ..._distanceStats(ctx, p, f, a, weightKg, elapsed),
-          const SizedBox(height: S.x8),
+          SizedBox(height: isExpressive(ctx) ? S.x3 : S.x8),
           LiveHeart(f),
           if (f.route.length > 1) ...[
             const SizedBox(height: S.x5),
@@ -1120,7 +1387,7 @@ class LiveMeasured extends StatelessWidget {
                       '${_distanceText(ctx, f.distanceKm!)} from the fixes '
                           'recorded so far.'),
               child: ClipRRect(
-                borderRadius: R.rLg,
+                borderRadius: R.cardOf(ctx),
                 child: Container(
                   color: p.card2,
                   child: CustomPaint(
@@ -1728,7 +1995,7 @@ class _LiveStrengthState extends State<LiveStrength> {
                   alignment: Alignment.center,
                   decoration: BoxDecoration(
                       color: on ? p.fill(cols[i]) : p.wash(cols[i]),
-                      borderRadius: R.rMd),
+                      borderRadius: R.controlOf(c)),
                   child: Text('$v',
                       style: F.head.copyWith(
                           color: on ? p.inkOnFill : p.on(cols[i]))),
@@ -1977,8 +2244,9 @@ class _LiveSwimState extends State<LiveSwim> {
             }),
           ]),
           const SizedBox(height: S.x6),
-          Row(
-              mainAxisAlignment: MainAxisAlignment.center,
+          Wrap(
+              alignment: WrapAlignment.center,
+              runSpacing: S.x2,
               children: [
                 for (final len in pools) ...[
                   Pressable(
@@ -2164,7 +2432,8 @@ class _LiveFlowState extends State<LiveFlow>
           Container(
             height: 210,
             decoration: BoxDecoration(
-                borderRadius: R.rXl, color: p.wash(C.teal)),
+                borderRadius: p.expressive ? R.rXxl : R.rXl,
+                color: p.wash(C.teal)),
             child: Stack(alignment: Alignment.center, children: [
               AnimatedBuilder(
                 animation: breath,

@@ -36,11 +36,12 @@ import 'package:openstrap_edge/ui2/ui2.dart';
 /// that changed rather than at a screenshot of everything.
 final _shot = GlobalKey();
 
-Widget _frame(Widget child, Brightness b, double scale) => MediaQuery(
+Widget _frame(Widget child, Brightness b, double scale,
+        {InterfaceStyle style = InterfaceStyle.original}) => MediaQuery(
       data: MediaQueryData(textScaler: TextScaler.linear(scale)),
       child: MaterialApp(
         debugShowCheckedModeBanner: false,
-        theme: buildTheme(b),
+        theme: buildTheme(b, style: style),
         home: Builder(
           builder: (c) => Scaffold(
             backgroundColor: P.of(c).bg,
@@ -135,19 +136,35 @@ void main() {
     }
   }
 
-  testWidgets('the shell has five destinations and cannot grow a sixth',
+  for (final style in InterfaceStyle.values) {
+    testWidgets(
+      '${style.name}: shell exposes four destinations and hides Nutrition',
       (tester) async {
-    await tester.pumpWidget(MaterialApp(
-      theme: buildTheme(Brightness.light),
-      home: AppShell(
-        builder: (c, d) => Center(child: Text(d.label)),
-      ),
-    ));
-    expect(ShellDomain.values, hasLength(5));
-    for (final d in ShellDomain.values) {
-      expect(find.text(d.label), findsWidgets, reason: '${d.label} tab missing');
-    }
-  });
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: buildTheme(Brightness.light, style: style),
+            home: AppShell(builder: (c, d) => const SizedBox.shrink()),
+          ),
+        );
+        expect(visibleShellDomains, hasLength(4));
+        expect(find.text(ShellDomain.nutrition.label), findsNothing);
+        final targets = tester.widgetList<Pressable>(find.byType(Pressable));
+        for (final d in visibleShellDomains) {
+          expect(find.byIcon(d.icon), findsOneWidget);
+          expect(
+            targets.any((target) => target.semanticLabel == d.label),
+            isTrue,
+          );
+          expect(
+            find.text(d.label),
+            style == InterfaceStyle.original || d == ShellDomain.home
+                ? findsOneWidget
+                : findsNothing,
+          );
+        }
+      },
+    );
+  }
 
   testWidgets('every tap target in the shell clears 44 pt', (tester) async {
     await tester.pumpWidget(MaterialApp(
@@ -175,49 +192,71 @@ void main() {
   // Both also cover 1.0x, because F-06 was a component clipped at 1.0x that
   // four goldens photographed and nobody noticed.
   group('past the golden ceiling', () {
-    for (final scale in const [1.0, 1.4, 2.0, 3.0, 3.1]) {
-      testWidgets('nothing overflows at ${scale}x', (tester) async {
+    for (final style in InterfaceStyle.values) {
+      for (final scale in const [1.0, 1.4, 2.0, 3.0, 3.1]) {
+        testWidgets('${style.name}: nothing overflows at ${scale}x', (
+          tester,
+        ) async {
+          tester.view.physicalSize = const Size(390 * 3, 4000 * 3);
+          tester.view.devicePixelRatio = 3;
+          addTearDown(tester.view.reset);
+          final broke = <String>[];
+          for (final e in all.entries) {
+            final errors = <String>[];
+            final previous = FlutterError.onError;
+            FlutterError.onError = (d) => errors.add(d.exceptionAsString());
+            await tester.pumpWidget(
+              _frame(e.value, Brightness.light, scale, style: style),
+            );
+            await tester.pump();
+            FlutterError.onError = previous;
+            for (final err in errors) {
+              if (err.contains('overflowed')) broke.add('${e.key}: $err');
+            }
+          }
+          expect(
+            broke,
+            isEmpty,
+            reason:
+                'a card that overflows at an accessibility text size is a '
+                'measurement pushed off the screen:\n${broke.join('\n')}',
+          );
+        });
+      }
+
+      testWidgets('${style.name}: every tap target in every case clears 44 pt', (
+        tester,
+      ) async {
         tester.view.physicalSize = const Size(390 * 3, 4000 * 3);
         tester.view.devicePixelRatio = 3;
         addTearDown(tester.view.reset);
-        final broke = <String>[];
+        final small = <String>[];
         for (final e in all.entries) {
-          final errors = <String>[];
-          final previous = FlutterError.onError;
-          FlutterError.onError = (d) => errors.add(d.exceptionAsString());
-          await tester.pumpWidget(_frame(e.value, Brightness.light, scale));
+          await tester.pumpWidget(
+            _frame(e.value, Brightness.light, 1.0, style: style),
+          );
           await tester.pump();
-          FlutterError.onError = previous;
-          for (final err in errors) {
-            if (err.contains('overflowed')) broke.add('${e.key}: $err');
+          for (final w in tester.widgetList<Pressable>(
+            find.byType(Pressable),
+          )) {
+            if (w.onTap == null) continue;
+            final s = tester.getSize(find.byWidget(w));
+            if (s.height < S.tap || s.width < S.tap) {
+              small.add(
+                '${e.key} · ${w.semanticLabel ?? 'unlabelled'} '
+                'is ${s.width} × ${s.height}',
+              );
+            }
           }
         }
-        expect(broke, isEmpty,
-            reason: 'a card that overflows at an accessibility text size is a '
-                'measurement pushed off the screen:\n${broke.join('\n')}');
+        expect(
+          small,
+          isEmpty,
+          reason:
+              'the 44 pt guarantee only held for the shell tabs, '
+              'which is how seven sub-44 controls shipped:\n${small.join('\n')}',
+        );
       });
     }
-
-    testWidgets('every tap target in every case clears 44 pt', (tester) async {
-      tester.view.physicalSize = const Size(390 * 3, 4000 * 3);
-      tester.view.devicePixelRatio = 3;
-      addTearDown(tester.view.reset);
-      final small = <String>[];
-      for (final e in all.entries) {
-        await tester.pumpWidget(_frame(e.value, Brightness.light, 1.0));
-        await tester.pump();
-        for (final w in tester.widgetList<Pressable>(find.byType(Pressable))) {
-          if (w.onTap == null) continue;
-          final s = tester.getSize(find.byWidget(w));
-          if (s.height < S.tap || s.width < S.tap) {
-            small.add('${e.key} · ${w.semanticLabel ?? 'unlabelled'} '
-                'is ${s.width} × ${s.height}');
-          }
-        }
-      }
-      expect(small, isEmpty,
-          reason: 'the 44 pt guarantee only held for the five shell tabs, '
-              'which is how seven sub-44 controls shipped:\n${small.join('\n')}');
-    });
   });
 }
