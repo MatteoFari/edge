@@ -2830,5 +2830,44 @@
   "settingsHomeAiBriefingSub": "Affiche la carte sur Accueil. La masquer conserve les résumés enregistrés",
   "@settingsHomeAiBriefingSub": {
     "description": "Explains that hiding the Home briefing card does not delete saved briefings."
+  },
+  "sleepPlanningEstimate": "Plan de sommeil estimé",
+  "sleepPlanningBaseline": "Estimation de base du sommeil",
+  "sleepPlanningExtra": "Sommeil supplémentaire conseillé",
+  "sleepPlanningTotal": "Conseil pour le prochain sommeil",
+  "sleepPlanningRecentShortfall": "Manque de sommeil récent",
+  "sleepPlanningEstimateBody": "Un repère basé sur votre sommeil enregistré, pas une mesure du besoin biologique. Le supplément est proportionnel et plafonné.",
+  "sleepPlanningNightShortfall": "{day} : {duration} sous votre référence de sommeil.",
+  "@sleepPlanningNightShortfall": {
+    "placeholders": {
+      "day": {
+        "type": "String"
+      },
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "sleepPlanningMissing": "{count} jours récents sont incomplets. Le manque total et le conseil ne sont pas disponibles.",
+  "@sleepPlanningMissing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "sleepPlanningPolicy": "Estimation sur sept jours : {retention}% conservé, {fraction}% ajouté, jusqu’à {cap}. Règles de planification, pas une formule de récupération prouvée. Total entre 6 et 11 heures.",
+  "@sleepPlanningPolicy": {
+  "placeholders": {
+    "retention": {
+      "type": "String"
+    },
+    "fraction": {
+      "type": "String"
+    },
+    "cap": {
+      "type": "String"
+    }
   }
+}
 }

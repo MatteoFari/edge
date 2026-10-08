@@ -10376,6 +10376,30 @@ class LocalDb {
   static Future<Set<String>> pendingSleepPlanOverrideDays() async =>
       ((await _sleepPlanState(await instance))['pending_overrides'] as Map).keys.cast<String>().toSet();
 
+  /// Keep raw-less corrections durable without repeatedly scheduling an
+  /// impossible derive. A later recording import makes them eligible again.
+  static Future<Set<String>> sleepPlanOverrideDaysWithRecordings() async =>
+      (await instance).transaction((tx) async {
+        final pending = (await _sleepPlanState(tx))['pending_overrides'] as Map;
+        final available = <String>{};
+        for (final day in pending.keys.cast<String>()) {
+          final date = DateTime.tryParse(day);
+          final end = localDayEndSec(day);
+          if (date == null || end == null) continue;
+          final start = DateTime(date.year, date.month, date.day - 1, 12)
+              .millisecondsSinceEpoch ~/ 1000;
+          final override = await tx.query('sleep_override',
+              where: 'day_id = ?', whereArgs: [day], limit: 1);
+          final onset = override.isEmpty ? start : override.single['onset_ts'] as int;
+          final wake = override.isEmpty ? end : override.single['offset_ts'] as int;
+          final rows = await tx.rawQuery('SELECT 1 FROM decoded_onehz '
+              'WHERE rec_ts >= ? AND rec_ts < ? LIMIT 1',
+              [onset < start ? onset : start, wake > end ? wake : end]);
+          if (rows.isNotEmpty) available.add(day);
+        }
+        return available;
+      });
+
   static Future<bool> sleepPlanRefreshPending() async =>
       (await _sleepPlanState(await instance))['refresh_pending'] == true;
 
@@ -10464,8 +10488,10 @@ class LocalDb {
       }
       await tx.insert('baselines', {'key': key, 'payload_json': payloadJson,
         'updated_at': updatedAt}, conflictAlgorithm: ConflictAlgorithm.replace);
-      if (key == 'crossday' && sleepPlanContext != null &&
-          !sleepPlanHasPendingOverrides(sleepPlanContext)) {
+      final handledPlan = key == 'crossday' && sleepPlanContext != null &&
+          sleepPlanOverridesHandled(sleepPlanContext,
+              (jsonDecode(payloadJson) as Map)['sleep_planning']);
+      if (handledPlan) {
         await _recordSleepTarget(tx, payloadJson, updatedAt);
       }
       if (key == 'crossday_input') {
@@ -10473,8 +10499,7 @@ class LocalDb {
         state['refresh_pending'] = true;
         await _putSleepPlanState(tx, state);
       }
-      if (key == 'crossday' && sleepPlanContext != null &&
-          !sleepPlanHasPendingOverrides(sleepPlanContext)) {
+      if (handledPlan) {
         final state = await _sleepPlanState(tx);
         state['refresh_pending'] = false;
         await _putSleepPlanState(tx, state);

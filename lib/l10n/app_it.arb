@@ -14524,5 +14524,44 @@
   "settingsHomeAiBriefingSub": "Mostra la scheda nella Home. Nasconderla conserva i riepiloghi salvati",
   "@settingsHomeAiBriefingSub": {
     "description": "Explains that hiding the Home briefing card does not delete saved briefings."
+  },
+  "sleepPlanningEstimate": "Piano del sonno stimato",
+  "sleepPlanningBaseline": "Stima di base del sonno",
+  "sleepPlanningExtra": "Sonno aggiuntivo consigliato",
+  "sleepPlanningTotal": "Sonno consigliato per la prossima notte",
+  "sleepPlanningRecentShortfall": "Sonno mancante recente",
+  "sleepPlanningEstimateBody": "Una guida basata sul sonno registrato, non una misura del bisogno biologico. Il sonno aggiuntivo è ridotto e limitato.",
+  "sleepPlanningNightShortfall": "{day}: {duration} sotto il tuo riferimento di sonno.",
+  "@sleepPlanningNightShortfall": {
+    "placeholders": {
+      "day": {
+        "type": "String"
+      },
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "sleepPlanningMissing": "{count} giorni recenti sono incompleti. Il totale del sonno mancante e il consiglio non sono disponibili.",
+  "@sleepPlanningMissing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "sleepPlanningPolicy": "Stima su sette giorni: {retention}% mantenuto, {fraction}% aggiunto, fino a {cap}. Regole di pianificazione, non una formula di recupero dimostrata. Il totale resta tra 6 e 11 ore.",
+  "@sleepPlanningPolicy": {
+  "placeholders": {
+    "retention": {
+      "type": "String"
+    },
+    "fraction": {
+      "type": "String"
+    },
+    "cap": {
+      "type": "String"
+    }
   }
+}
 }

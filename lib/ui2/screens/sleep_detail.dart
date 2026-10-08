@@ -208,7 +208,10 @@ class SleepData {
   final double? wakeMinute, napCreditMin, strainBonusMin;
   final bool showCurrentPlan;
   final bool planStale;
-  final String? planUpdatedDay;
+  final String? planUpdatedDay, planNightDay;
+  final double? baselineMin, extraSleepMin, latestShortfallMin;
+  final int? missingPlanDays;
+  final double? retentionPercent, adjustmentPercent, maxExtraMin;
 
   /// The user's own recent nights, LAST NIGHT EXCLUDED, oldest→newest. Minutes
   /// for duration and deep, whole percent for efficiency, epoch seconds for
@@ -242,6 +245,14 @@ class SleepData {
     this.showCurrentPlan = true,
     this.planStale = false,
     this.planUpdatedDay,
+    this.planNightDay,
+    this.baselineMin,
+    this.extraSleepMin,
+    this.latestShortfallMin,
+    this.missingPlanDays,
+    this.retentionPercent,
+    this.adjustmentPercent,
+    this.maxExtraMin,
     this.tstHistory = const [],
     this.deepHistory = const [],
     this.effHistory = const [],
@@ -359,17 +370,44 @@ class SleepData {
     final cd = await repo.getInsights();
     final showCurrentPlan =
         includeCurrentPlan || want == null || day == todayLabel();
-    final planStale = showCurrentPlan &&
+    final planStale =
+        showCurrentPlan &&
         (cd['sleep_plan_stale'] is Map || cd['stale'] is Map);
     final coach = showCurrentPlan && !planStale ? cd['sleep_coach'] : null;
     final builtAt = coach is Map ? _coachReading(cd['built_at_epoch']) : null;
     final planUpdatedDay = builtAt != null && builtAt > 0
-        ? dayLabelOf(DateTime.fromMillisecondsSinceEpoch(builtAt.round() * 1000))
+        ? dayLabelOf(
+            DateTime.fromMillisecondsSinceEpoch(builtAt.round() * 1000),
+          )
         : null;
     final needEnv = coach is Map ? coach['need'] : null;
     final needSec = _coachReading(envValue(needEnv)?['need_sec']);
     final debtEnv = showCurrentPlan && !planStale ? cd['sleep_debt'] : null;
     final debtH = _coachReading(envValue(debtEnv)?['debt_hours']);
+    final planning = showCurrentPlan && !planStale
+        ? cd['sleep_planning']
+        : null;
+    final reference = planning is Map ? planning['reference'] : null;
+    final policy = planning is Map ? planning['policy'] : null;
+    final retention = policy is Map
+        ? _coachReading(policy['daily_retention'])
+        : null;
+    final fraction = policy is Map
+        ? _coachReading(policy['adjustment_fraction'])
+        : null;
+    final cap = policy is Map
+        ? _coachReading(policy['max_adjustment_sec'])
+        : null;
+    final result = envValue(planning is Map ? planning['result'] : null);
+    final baselineSec = reference is Map
+        ? _coachReading(reference['reference_sec'])
+        : null;
+    final extraSec = _coachReading(result?['shortfall_adjustment_sec']);
+    final latestSec = _coachReading(result?['latest_shortfall_sec']);
+    final planNightDay = planning is Map
+        ? planning['night_day'] as String?
+        : null;
+    final missingDays = (result?['missing_days'] as num?)?.toInt();
     final bedEnv = coach is Map ? coach['bedtime'] : null;
     final need = envMetric(
       needEnv,
@@ -402,6 +440,14 @@ class SleepData {
         showCurrentPlan: showCurrentPlan,
         planStale: planStale,
         planUpdatedDay: planUpdatedDay,
+        planNightDay: planNightDay,
+        baselineMin: baselineSec == null ? null : baselineSec / 60,
+        extraSleepMin: extraSec == null ? null : extraSec / 60,
+        latestShortfallMin: latestSec == null ? null : latestSec / 60,
+        missingPlanDays: missingDays,
+        retentionPercent: retention == null ? null : retention * 100,
+        adjustmentPercent: fraction == null ? null : fraction * 100,
+        maxExtraMin: cap == null ? null : cap / 60,
         need: need,
         debt: debt,
         bedtime: bedtime,
@@ -440,6 +486,14 @@ class SleepData {
       showCurrentPlan: showCurrentPlan,
       planStale: planStale,
       planUpdatedDay: planUpdatedDay,
+      planNightDay: planNightDay,
+      baselineMin: baselineSec == null ? null : baselineSec / 60,
+      extraSleepMin: extraSec == null ? null : extraSec / 60,
+      latestShortfallMin: latestSec == null ? null : latestSec / 60,
+      missingPlanDays: missingDays,
+      retentionPercent: retention == null ? null : retention * 100,
+      adjustmentPercent: fraction == null ? null : fraction * 100,
+      maxExtraMin: cap == null ? null : cap / 60,
       days: days,
       night: night,
       timeline: timeline,
@@ -457,6 +511,55 @@ class SleepData {
       awakenings: wakeups,
       longestSleepMin: longest,
       solMin: sol,
+    );
+  }
+}
+
+/// The same saved planning figures on Home and the full Night screen.
+class SleepPlanSummary extends StatelessWidget {
+  final SleepData data;
+  final bool showShortfall;
+  const SleepPlanSummary(this.data, {super.key, this.showShortfall = false});
+
+  @override
+  Widget build(BuildContext c) {
+    final l = AppLocalizations.of(c);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (data.baselineMin != null)
+          MetricRow(
+            LucideIcons.bedDouble,
+            C.blue,
+            l?.sleepPlanningBaseline ?? 'Baseline sleep estimate',
+            hm(data.baselineMin),
+            wrapLabel: true,
+          ),
+        if (showShortfall && data.debt.value != null)
+          MetricRow(
+            LucideIcons.trendingDown,
+            C.orange,
+            l?.sleepPlanningRecentShortfall ?? 'Recent sleep shortfall',
+            hm(data.debt.value),
+            wrapLabel: true,
+          ),
+        if (data.extraSleepMin != null)
+          MetricRow(
+            LucideIcons.plus,
+            C.orange,
+            l?.sleepPlanningExtra ?? 'Extra sleep recommended',
+            hm(data.extraSleepMin),
+            wrapLabel: true,
+          ),
+        if (data.need.value != null)
+          MetricRow(
+            LucideIcons.moon,
+            C.indigo,
+            l?.sleepPlanningTotal ?? 'Next sleep recommendation',
+            hm(data.need.value),
+            wrapLabel: true,
+          ),
+      ],
     );
   }
 }
@@ -753,6 +856,8 @@ class _SleepDetailState extends State<SleepDetail> with RevisionReload {
           versus,
         ),
 
+      if (d.showCurrentPlan) _nextSleep(c, p, d),
+
       // ── 5 · WHAT STOOD OUT ──
       // Named after the night the nav bar is already showing. "Unusual last
       // night — Nothing stood out." is a present-tense all-clear, and it was
@@ -771,9 +876,6 @@ class _SleepDetailState extends State<SleepDetail> with RevisionReload {
         l?.sleepDetailOvernightSection ?? 'Overnight signals',
         _overnight(c, p, d),
       ),
-
-      // ── 7 · ONE TAKEAWAY ──
-      if (d.showCurrentPlan) _nextSleep(c, p, d),
 
       const SizedBox(height: S.x5),
       // The night this screen is steered to, not the newest one. Dropping it
@@ -2062,47 +2164,47 @@ class _SleepDetailState extends State<SleepDetail> with RevisionReload {
         debt != null ||
         d.wakeMinute != null ||
         d.napCreditMin != null ||
-        d.strainBonusMin != null;
+        d.strainBonusMin != null ||
+        d.baselineMin != null ||
+        d.latestShortfallMin != null;
     if (!hasFacts) return absence ?? const SizedBox.shrink();
-
-    final reason = [
-      if (need != null)
-        l?.sleepDetailYourNeedIs(hm(need)) ?? 'Your need is ${hm(need)}',
-      if (debt != null && debt >= 1)
-        l?.sleepDetailYouAreDown(hm(debt)) ?? 'you are ${hm(debt)} down',
-    ].join(', ');
 
     final facts = Surface(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (need != null || bed != null)
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.baseline,
-              textBaseline: TextBaseline.alphabetic,
-              children: [
-                Flexible(
-                  child: Text(
-                    bed != null ? clock(bed) : hm(need),
-                    style: F.n34.copyWith(color: p.ink),
-                  ),
-                ),
-                const SizedBox(width: S.x2),
-                Flexible(
-                  child: Text(
-                    bed != null
-                        ? (l?.sleepDetailLightsOut ?? 'lights out')
-                        : (l?.sleepDetailToAimFor ?? 'to aim for'),
-                    style: F.cap.copyWith(color: p.ink3),
-                  ),
-                ),
-              ],
-            ),
-          if (reason.isNotEmpty) ...[
-            const SizedBox(height: S.x3),
+          Text(
+            l?.sleepPlanningEstimate ?? 'Estimated sleep plan',
+            style: F.head.copyWith(color: p.ink),
+          ),
+          const SizedBox(height: S.x2),
+          SleepPlanSummary(d),
+          if (d.latestShortfallMin != null) ...[
+            const SizedBox(height: S.x2),
             Text(
-              '$reason.',
-              style: F.body.copyWith(color: p.ink2, height: 1.5),
+              l?.sleepPlanningNightShortfall(
+                    prettyDay(d.planNightDay, l),
+                    hm(d.latestShortfallMin),
+                  ) ??
+                  '${prettyDay(d.planNightDay, l)}: ${hm(d.latestShortfallMin)} '
+                      'below your sleep reference.',
+              style: F.body.copyWith(color: p.ink2),
+            ),
+          ],
+          const SizedBox(height: S.x2),
+          Text(
+            l?.sleepPlanningEstimateBody ??
+                'A guide from your recorded sleep, not a measurement of biological '
+                    'need. The extra sleep adjustment is scaled and capped.',
+            style: F.cap.copyWith(color: p.ink3),
+          ),
+          if ((d.missingPlanDays ?? 0) > 0) ...[
+            const SizedBox(height: S.x2),
+            Text(
+              l?.sleepPlanningMissing(d.missingPlanDays!) ??
+                  '${d.missingPlanDays} recent days are incomplete. The total '
+                      'shortfall and recommendation are unavailable.',
+              style: F.cap.copyWith(color: p.ink2),
             ),
           ],
           const SizedBox(height: S.x2),
@@ -2129,52 +2231,71 @@ class _SleepDetailState extends State<SleepDetail> with RevisionReload {
               ],
             ),
           ),
-          if (_showNeedBreakdown) ...[
-            if (need != null)
-              MetricRow(
-                LucideIcons.bedDouble,
-                C.blue,
-                l?.wellnessTonightsNeed ?? "Tonight's need",
-                hm(need),
-              ),
-            if (debt != null)
-              MetricRow(
-                LucideIcons.trendingDown,
-                C.orange,
-                l?.wellnessSleepDebt ?? 'Sleep debt',
-                hm(debt),
-              ),
-            if (d.strainBonusMin != null)
-              MetricRow(
-                LucideIcons.flame,
-                C.purple,
-                l?.wellnessAddedForStrain ?? 'Added for strain',
-                '${d.strainBonusMin!.round()}',
-                unit: 'min',
-              ),
-            if (d.napCreditMin != null)
-              MetricRow(
-                LucideIcons.sun,
-                C.yellow,
-                l?.wellnessCreditedFromNaps ?? 'Credited from naps',
-                '${d.napCreditMin!.round()}',
-                unit: 'min',
-              ),
-            if (bed != null)
-              MetricRow(
-                LucideIcons.moon,
-                C.indigo,
-                l?.wellnessTargetBedtime ?? 'Target bedtime',
-                clock(bed),
-              ),
-            if (d.wakeMinute != null)
-              MetricRow(
-                LucideIcons.sunrise,
-                C.orange,
-                l?.wellnessTargetWake ?? 'Target wake',
-                clock(d.wakeMinute),
-              ),
-          ],
+          AnimatedSize(
+            duration: motion(c, Motion.base),
+            curve: Motion.effectsCurve(c),
+            alignment: Alignment.topCenter,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                if (_showNeedBreakdown) ...[
+                  if (debt != null)
+                    MetricRow(
+                      LucideIcons.trendingDown,
+                      C.orange,
+                      l?.sleepPlanningRecentShortfall ??
+                          'Recent sleep shortfall',
+                      hm(debt),
+                    ),
+                  if (d.strainBonusMin != null)
+                    MetricRow(
+                      LucideIcons.flame,
+                      C.purple,
+                      l?.wellnessAddedForStrain ?? 'Added for strain',
+                      '${d.strainBonusMin!.round()}',
+                      unit: 'min',
+                    ),
+                  if (d.napCreditMin != null)
+                    MetricRow(
+                      LucideIcons.sun,
+                      C.yellow,
+                      l?.wellnessCreditedFromNaps ?? 'Credited from naps',
+                      '${d.napCreditMin!.round()}',
+                      unit: 'min',
+                    ),
+                  if (bed != null)
+                    MetricRow(
+                      LucideIcons.moon,
+                      C.indigo,
+                      l?.wellnessTargetBedtime ?? 'Target bedtime',
+                      clock(bed),
+                    ),
+                  if (d.wakeMinute != null)
+                    MetricRow(
+                      LucideIcons.sunrise,
+                      C.orange,
+                      l?.wellnessTargetWake ?? 'Target wake',
+                      clock(d.wakeMinute),
+                    ),
+                  if (d.retentionPercent != null &&
+                      d.adjustmentPercent != null &&
+                      d.maxExtraMin != null) ...[
+                    const SizedBox(height: S.x2),
+                    Text(
+                      l?.sleepPlanningPolicy(
+                            '${d.retentionPercent!.round()}',
+                            '${d.adjustmentPercent!.round()}',
+                            hm(d.maxExtraMin),
+                          ) ??
+                          'Seven-day estimate. Scaled and capped planning rules, '
+                              'not a proven repayment formula.',
+                      style: F.cap.copyWith(color: p.ink3),
+                    ),
+                  ],
+                ],
+              ],
+            ),
+          ),
         ],
       ),
     );

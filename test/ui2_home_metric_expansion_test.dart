@@ -21,6 +21,7 @@ const _home = HomeData(
   readiness: Metric(value: 73),
   sleepMin: Metric(value: 431),
   sleepNeedMin: Metric(value: 487),
+  sleepTargetMin: Metric(value: 487),
   strain: Metric(value: 12.4),
   rhr: Metric(value: 51),
   steps: Metric(value: 6234),
@@ -40,6 +41,29 @@ class _Repo extends LocalRepository {
   Completer<Map<String, dynamic>>? nextHeart;
   String? heartDay;
   final Map<String, Map<String, dynamic>> hearts = {};
+  Map<String, dynamic> insights = {
+    'sleep_coach': {
+      'need': {
+        'value': {'need_sec': 540 * 60},
+      },
+    },
+    'sleep_debt': {
+      'value': {'debt_hours': 4},
+    },
+    'sleep_planning': {
+      'reference': {'reference_sec': 480 * 60},
+      'result': {
+        'value': {'shortfall_adjustment_sec': 60 * 60},
+      },
+    },
+  };
+  @override
+  Future<Map<String, dynamic>> getInsights() async => insights;
+  @override
+  Future<List<Map<String, dynamic>>> sleepWindows({
+    int days = 7,
+    String? before,
+  }) async => [];
   @override
   Future<int> pendingActivityCount() async => 0;
   @override
@@ -192,6 +216,106 @@ Future<(_Repo, AppState)> _pump(
 }
 
 void main() {
+  testWidgets(
+    'compact Sleep shows readable plan values in both themes and large text',
+    (t) async {
+      t.view.physicalSize = const Size(360, 800);
+      t.view.devicePixelRatio = 1;
+      addTearDown(t.view.reset);
+      const data = HomeMetricPreviewData(
+        day: '2026-10-08',
+        sleep: SleepData(
+          baselineMin: 480,
+          extraSleepMin: 60,
+          need: Metric(value: 540),
+          debt: Metric(value: 240),
+        ),
+      );
+      for (final brightness in Brightness.values) {
+        for (final scale in [1.0, 3.1]) {
+          await t.pumpWidget(
+            MaterialApp(
+              theme: buildTheme(brightness, style: InterfaceStyle.expressive),
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
+              locale: const Locale('en'),
+              builder: (c, child) => MediaQuery(
+                data: MediaQuery.of(c).copyWith(
+                  textScaler: TextScaler.linear(scale),
+                  disableAnimations: true,
+                ),
+                child: child!,
+              ),
+              home: Scaffold(
+                body: SingleChildScrollView(
+                  child: Padding(
+                    padding: const EdgeInsets.all(S.x4),
+                    child: Builder(
+                      builder: (c) =>
+                          buildHomeMetricPreview(c, data, HomeRingKind.sleep),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          );
+          await t.pumpAndSettle();
+          for (final label in [
+            'Baseline sleep estimate',
+            'Recent sleep shortfall',
+            'Extra sleep recommended',
+            'Next sleep recommendation',
+          ]) {
+            final finder = find.text(label);
+            expect(finder, findsOneWidget);
+            expect(t.widget<Text>(finder).maxLines, isNull);
+          }
+          for (final value in ['8h 00m', '4h 00m', '1h 00m', '9h 00m']) {
+            expect(find.text(value), findsOneWidget);
+          }
+          expect(t.takeException(), isNull);
+        }
+      }
+    },
+  );
+  test(
+    'compact Sleep loads the same plan and hides it on explicit historical nights',
+    () async {
+      final repo = _Repo();
+      final today = todayLabel();
+      final date = DateTime.parse(today);
+      final previous = dayLabelOf(
+        DateTime(date.year, date.month, date.day - 1),
+      );
+      var data = await HomeMetricPreviewData.load(
+        repo,
+        HomeRingKind.sleep,
+        today,
+      );
+      expect(data.sleep!.need.value, 540);
+      expect(data.sleep!.debt.value, 240);
+      data = await HomeMetricPreviewData.load(
+        repo,
+        HomeRingKind.sleep,
+        previous,
+      );
+      expect(data.sleep!.showCurrentPlan, false);
+      expect(data.sleep!.need.value, isNull);
+      data = await HomeMetricPreviewData.load(
+        repo,
+        HomeRingKind.sleep,
+        previous,
+        includeCurrentPlan: true,
+      );
+      expect(data.sleep!.need.value, 540);
+      repo.insights = {
+        'sleep_plan_stale': {'kind': 'plan_context'},
+      };
+      data = await HomeMetricPreviewData.load(repo, HomeRingKind.sleep, today);
+      expect(data.sleep!.planStale, true);
+      expect(data.sleep!.need.value, isNull);
+    },
+  );
   setUpAll(() async {
     // Match the phone's bundled font advances when checking clipped readings.
     for (final family in ['.SF Pro Text', 'Manrope']) {
@@ -203,6 +327,153 @@ void main() {
       }
       await loader.load();
     }
+  });
+  for (final full in [false, true]) {
+    testWidgets(
+      '${full ? 'full' : 'expanded'} Strain keeps all five coloured zones on one row',
+      (t) async {
+        t.view.physicalSize = const Size(360, 1200);
+        t.view.devicePixelRatio = 1;
+        addTearDown(t.view.reset);
+        final semantics = t.ensureSemantics();
+        const data = DayStrainData(
+          curve: [0, 4, 8, 12],
+          strain: 12,
+          zoneMin: [1200, 120, 80, 36, 4],
+        );
+        try {
+          for (final brightness in Brightness.values) {
+            for (final scale in [1.0, 1.3, 3.1]) {
+              await t.pumpWidget(
+                MaterialApp(
+                  theme: buildTheme(
+                    brightness,
+                    style: InterfaceStyle.expressive,
+                  ),
+                  localizationsDelegates:
+                      AppLocalizations.localizationsDelegates,
+                  supportedLocales: AppLocalizations.supportedLocales,
+                  locale: const Locale('en'),
+                  builder: (c, child) => MediaQuery(
+                    data: MediaQuery.of(c).copyWith(
+                      textScaler: TextScaler.linear(scale),
+                      disableAnimations: true,
+                    ),
+                    child: child!,
+                  ),
+                  home: full
+                      ? const DayStrainDetail(data: data)
+                      : Scaffold(
+                          body: Padding(
+                            padding: const EdgeInsets.all(S.x4),
+                            child: SingleChildScrollView(
+                              child: Builder(
+                                builder: (c) => buildHomeMetricPreview(
+                                  c,
+                                  const HomeMetricPreviewData(
+                                    day: '2026-10-08',
+                                    strain: data,
+                                  ),
+                                  HomeRingKind.strain,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                ),
+              );
+              await t.pumpAndSettle();
+              final row = find.byType(ZoneMinutesRow);
+              if (full) {
+                await t.scrollUntilVisible(
+                  row,
+                  300,
+                  scrollable: find.byType(Scrollable).first,
+                );
+              } else {
+                await t.ensureVisible(row);
+              }
+              await t.pumpAndSettle();
+              final p = P.of(t.element(row));
+              final top = t.getTopLeft(find.text('Z1')).dy;
+              for (var i = 0; i < 5; i++) {
+                final label = find.text('Z${i + 1}');
+                expect(t.getTopLeft(label).dy, top);
+                final circle = t.widget<Container>(
+                  find
+                      .ancestor(of: label, matching: find.byType(Container))
+                      .first,
+                );
+                final decoration = circle.decoration! as BoxDecoration;
+                expect(decoration.shape, BoxShape.circle);
+                expect(decoration.border!.top.color, ZoneBar.cols(p)[i]);
+                expect(
+                  find.bySemanticsLabel('Z${i + 1}, ${data.zoneMin![i]} min'),
+                  findsOneWidget,
+                );
+              }
+              final scroll = t.state<ScrollableState>(
+                find.descendant(of: row, matching: find.byType(Scrollable)),
+              );
+              final bounds = t.getRect(row);
+              if (scale <= 1.3) {
+                expect(scroll.position.maxScrollExtent, 0);
+                expect(
+                  t.getRect(find.text('Z5')).right,
+                  lessThanOrEqualTo(bounds.right),
+                );
+                expect(
+                  t.getRect(find.text('4 min')).right,
+                  lessThanOrEqualTo(bounds.right),
+                );
+              } else {
+                expect(scroll.position.maxScrollExtent, greaterThan(0));
+                await t.drag(row, const Offset(-1000, 0));
+                await t.pumpAndSettle();
+                expect(
+                  t.getRect(find.text('Z5')).right,
+                  lessThanOrEqualTo(bounds.right),
+                );
+                expect(
+                  t.getRect(find.text('Z5')).left,
+                  greaterThanOrEqualTo(bounds.left),
+                );
+              }
+              expect(
+                t.takeException(),
+                isNull,
+                reason: '$full, $brightness, $scale',
+              );
+            }
+          }
+        } finally {
+          semantics.dispose();
+        }
+      },
+    );
+  }
+  testWidgets('missing zone readings do not become zero minutes', (t) async {
+    await t.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: Builder(
+            builder: (c) => buildHomeMetricPreview(
+              c,
+              const HomeMetricPreviewData(day: '2026-10-08'),
+              HomeRingKind.strain,
+            ),
+          ),
+        ),
+      ),
+    );
+    expect(find.byType(ZoneMinutesRow), findsNothing);
+    expect(find.text('0 min'), findsNothing);
+    await t.pumpWidget(
+      const MaterialApp(home: DayStrainDetail(data: DayStrainData())),
+    );
+    expect(find.byType(ZoneMinutesRow), findsNothing);
+    expect(find.text('0 min'), findsNothing);
+    expect(t.takeException(), isNull);
   });
   for (final (scale, height) in [(1.0, 210.0), (1.3, 194.0)]) {
     for (final history in [false, true]) {

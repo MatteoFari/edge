@@ -350,7 +350,7 @@ void main() {
         find.textContaining('Longest unbroken stretch 2h 42m'), findsOneWidget);
   });
 
-  testWidgets('tonight is one takeaway, not six numbers', (t) async {
+  testWidgets('next sleep shows its estimate and keeps timing in the breakdown', (t) async {
     await _pump(
       t,
       SleepData(
@@ -364,9 +364,14 @@ void main() {
             const Metric(value: 1360, confidence: .7, tier: MetricTier.estimate),
       ),
     );
-    expect(find.text('lights out'), findsOneWidget);
-    expect(find.textContaining('Your need is 7h 42m'), findsOneWidget);
-    expect(find.textContaining('22m down'), findsOneWidget);
+    expect(find.text('Estimated sleep plan'), findsOneWidget);
+    expect(find.text('Next sleep recommendation'), findsOneWidget);
+    expect(find.text('7h 42m'), findsOneWidget);
+    expect(find.text('Target bedtime'), findsNothing);
+    await t.tap(find.text('Sleep need breakdown'));
+    await t.pumpAndSettle();
+    expect(find.text('Target bedtime'), findsOneWidget);
+    expect(find.text('22m'), findsOneWidget);
   });
 
   group('correctedSleepWindow', () {

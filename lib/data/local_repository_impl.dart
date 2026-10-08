@@ -163,13 +163,14 @@ class LocalRepositoryImpl extends LocalRepository {
     final sameDay = artifact['built_for_day'] == today;
     final context = artifact['sleep_plan_context'];
     if (sameDay && context is Map &&
-        !LocalDb.sleepPlanHasPendingOverrides(Map<String, dynamic>.from(context)) &&
+        sleepPlanOverridesHandled(context, artifact['sleep_planning']) &&
         await LocalDb.sleepPlanContextCurrent(context)) {
       return artifact;
     }
     return Map<String, dynamic>.from(artifact)
       ..remove('sleep_coach')
       ..remove('sleep_debt')
+      ..remove('sleep_planning')
       ..['sleep_plan_stale'] = {
         'kind': sameDay ? 'plan_context' : 'plan_day',
         'built_for_day': artifact['built_for_day'],

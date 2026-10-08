@@ -1788,7 +1788,14 @@ import 'vendor_sleep.dart';
 // 110 → 111 (Edge-only): sleep performance compares a completed night with
 // its prospective saved target, not the next sleep's changing recommendation.
 // Missing/partial nights abstain. The new analytics estimator remains unshipped.
-const int kAlgoVersion = 111;
+// 111 → 112: isolated missing samples no longer reject a settled sleep window.
+// Observed-reference sleep planning replaces median-duration debt. Its pure
+// analytics policy is developed in the sibling checkout; release validation
+// requires its matching full-SHA pin. Readiness and calibration are unchanged.
+// 112 → 113 (Edge-only): pending sleep corrections are excluded from planning
+// inputs until recomputed. Raw-less old edits no longer hide unrelated plans;
+// missing recent nights still withhold the recommendation and total shortfall.
+const int kAlgoVersion = 113;
 /// The sibling SHAs this version was derived against, asserted against
 /// pubspec.yaml in test/db_serve_version_and_reads_test.dart.
 ///
@@ -4383,7 +4390,7 @@ class DerivationEngine {
     // A single bounded batch; AppState already backs off and retries this path
     // on startup/resume. No BLE pairing is needed to use retained local data.
     try {
-      final pending = (await LocalDb.pendingSleepPlanOverrideDays()).toList()..sort((a, b) => b.compareTo(a));
+      final pending = (await LocalDb.sleepPlanOverrideDaysWithRecordings()).toList()..sort((a, b) => b.compareTo(a));
       if (pending.isNotEmpty) {
         await runDays(profile, pending.take(8).toSet(), force: true);
       }
@@ -5698,6 +5705,27 @@ class DerivationEngine {
       // one layer up on the output.
       final builtForDay = context['local_day'] as String;
       final builtAtEpoch = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+      final previousCrossDay = await LocalDb.baseline('crossday');
+      final previousPayload = previousCrossDay?['payload_json'];
+      final previousPlan = _decodeBundle(previousPayload);
+      final previousPlanning = previousPlan?['sleep_planning'];
+      final retainedReference = previousPlanning is Map
+          ? previousPlanning['reference'] : null;
+      final anchor = ana.SleepPlanningReference.fromJson(retainedReference);
+      final anchorRows = <Map<String, dynamic>>[];
+      if (anchor != null) {
+        // Retained day bundles outlive raw recordings. Read the small frozen
+        // reference window too, so an old correction/deletion cannot silently
+        // reuse its earlier duration once it falls outside the 90-row rollup.
+        // The global source revision checked at commit covers these reads.
+        for (var ordinal = anchor.fromDay; ordinal <= anchor.throughDay; ordinal++) {
+          final utc = DateTime.utc(1970, 1, 1 + ordinal);
+          final date = dayLabelOf(DateTime(utc.year, utc.month, utc.day));
+          if (days.any((d) => d['date'] == date)) continue;
+          final row = await LocalDb.dayResult(date);
+          anchorRows.add(row ?? {'day_id': date, 'partial': 1});
+        }
+      }
       final (bundleJson, dropped) = await _runIsolateCancellable(
         () {
           final bundle =
@@ -5706,6 +5734,15 @@ class DerivationEngine {
                   profileMap,
                   cycleStartDates: cycleStarts,
                   sessionTypesByDate: sessionTypes,
+                  sleepPlanningDay: builtForDay,
+                  sleepPlanningAnchor: retainedReference,
+                  sleepPlanningExcludedDays: {
+                    for (final entry in context['pending_overrides'] as List)
+                      (entry as List).first as String,
+                  },
+                  sleepPlanningAnchorDays: [for (final row in anchorRows)
+                    ?crossDayInputRecord(row, _decodeBundle(row['payload_json']) ?? {},
+                        today: builtForDay, imported: const {})],
                 )
                 ..['algo_version'] = kAlgoVersion
                 ..['built_for_day'] = builtForDay
@@ -6141,6 +6178,7 @@ class DerivationEngine {
       'onset_sec': onsetMs == null ? null : (onsetMs / 1000).round(),
       'wake_sec': offsetMs == null ? null : (offsetMs / 1000).round(),
       'tst_min': tstSec == null ? null : (tstSec / 60).round(),
+      'planning_tst_sec': tstSec,
       // Fraction of the night we actually watched — wall-clock in-bed minus the
       // seconds nobody observed, over in-bed. TS-11 drops a morning whose night
       // is under half observed: a resting HR from two hours of contact is not a
@@ -6157,8 +6195,24 @@ class DerivationEngine {
           onsetMs != null && offsetMs != null && offsetMs > onsetMs &&
           payload['data_edge_sec'] is num &&
           (payload['data_edge_sec'] as num) >= offsetMs / 1000 + _headlineFreezeMarginSec,
-      'sleep_complete': payload['sleep_plan_complete'] == true &&
-          (row['partial'] as num?) == 0,
+      // Recheck retained accounting without restaging or inventing missing
+      // seconds. Pre-v111 rows lack data_edge_sec; their persisted completion
+      // time/finalization can establish that the episode had already settled.
+      'sleep_complete': sleepPlanNightComplete(payload,
+          partial: (row['partial'] as num?) != 0,
+          settledLegacy: (row['algo_version'] as num? ?? kAlgoVersion) < 111 &&
+              ((row['finalized'] as num?) == 1 ||
+                  (offsetMs != null && row['computed_at'] is num &&
+                      (row['computed_at'] as num) >= offsetMs +
+                          sleepPlanSettlingMarginSec * 1000))),
+      // Imported durations are reported history, not sensor-coverage evidence.
+      // They may support a descriptive reference, never invented stages or
+      // retrospective performance against a missing prospective target.
+      'reported_sleep': payload['imported'] == true &&
+          payload['source'] == 'whoop_export' && (row['partial'] as num?) == 0 &&
+          tstSec != null && tstSec.isFinite && tstSec > 0 &&
+          inBedSec != null && inBedSec.isFinite && tstSec <= inBedSec &&
+          onsetMs != null && offsetMs != null && offsetMs > onsetMs,
       'hypnogram': series?['hypnogram'],
       // 24 local-hour means of this day's HR curve — the ONLY intraday series
       // that survives long enough to support cross-day circadian analysis.

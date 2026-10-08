@@ -34,6 +34,10 @@ void main() {
     'built_for_day': today,
     'built_at_epoch': now - 1,
     'sleep_plan_context': context,
+    'sleep_planning': {
+      'reference': {'reference_sec': 28800, 'from_day': 1, 'through_day': 28,
+        'nights': 28, 'source': 'observed_longer_sleep', 'validated': false},
+    },
     'sleep_coach': {
       'reference_night_day': previousDay,
       'reference_night_onset_sec': now - 10 * 3600,
@@ -311,6 +315,10 @@ void main() {
         await LocalDb.close();
         db = await LocalDb.instance;
         await LocalDb.importFromDbFile(backup);
+        final restoredPlan = jsonDecode(
+            (await LocalDb.baseline('crossday'))!['payload_json'] as String) as Map;
+        expect((restoredPlan['sleep_planning'] as Map)['reference'],
+            (plan(8)['sleep_planning'] as Map)['reference']);
         expect(
           (await LocalDb.sleepTargetBefore(
             now + 120,

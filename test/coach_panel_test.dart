@@ -1068,6 +1068,30 @@ void main() {
     expect(entryHidden(t), isFalse);
   });
 
+  testWidgets('Ask Coach stays expanded for two and a half seconds', (t) async {
+    await mount(t, reduced: true);
+    final list = t.element(find.byKey(const ValueKey('page-list')));
+    OverscrollNotification(
+      metrics: pagePosition(t),
+      context: list,
+      overscroll: -80,
+      dragDetails: DragUpdateDetails(
+        globalPosition: Offset.zero,
+        delta: const Offset(0, 80),
+        primaryDelta: 80,
+      ),
+    ).dispatch(list);
+    await t.pump();
+    final entry = find.byKey(const ValueKey('coach-entry'));
+    final expanded = t.getSize(entry).width;
+    expect(expanded, greaterThan(100));
+    await t.pump(const Duration(milliseconds: 2499));
+    expect(t.getSize(entry).width, expanded);
+    await t.pump(const Duration(milliseconds: 1));
+    await t.pumpAndSettle();
+    expect(t.getSize(entry).width, S.tap + S.x2);
+  });
+
   testWidgets('idle label shrink moves through intermediate widths', (t) async {
     await mount(t, reduced: false);
     await t.drag(find.byKey(const ValueKey('page-list')), const Offset(0, 200));

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:lucide_icons_flutter/lucide_icons.dart';
 
 import '../../data/day_label.dart';
 import '../../data/local_repository.dart';
@@ -6,7 +7,7 @@ import '../../l10n/app_localizations.dart';
 import '../activity/day_strain.dart';
 import '../ui2.dart';
 import 'home_screen.dart' show HomeRingKind, denseDays, pointsOf, clockOfTs;
-import 'sleep_detail.dart' show SleepData, sleepStageRows;
+import 'sleep_detail.dart' show SleepData, SleepPlanSummary, sleepStageRows;
 
 /// A small read of the same persisted data used by the full detail screens.
 class HomeMetricPreviewData {
@@ -29,8 +30,9 @@ class HomeMetricPreviewData {
   static Future<HomeMetricPreviewData> load(
     LocalRepository repo,
     HomeRingKind kind,
-    String day,
-  ) async {
+    String day, {
+    bool includeCurrentPlan = false,
+  }) async {
     switch (kind) {
       case HomeRingKind.recovery:
         final chart = await repo.getChart('recovery');
@@ -51,7 +53,11 @@ class HomeMetricPreviewData {
       case HomeRingKind.sleep:
         return HomeMetricPreviewData(
           day: day,
-          sleep: await SleepData.loadNight(repo, want: day),
+          sleep: await SleepData.load(
+            repo,
+            want: day,
+            includeCurrentPlan: includeCurrentPlan,
+          ),
         );
       case HomeRingKind.strain:
         final data = await DayStrainData.load(repo, want: day);
@@ -308,6 +314,39 @@ class _SleepPreview extends StatelessWidget {
               ),
           ],
         ),
+        if (d.showCurrentPlan) ...[
+          const SizedBox(height: S.x3),
+          if (d.planStale)
+            StatusCard(
+              l?.sleepDetailPlanNeedsRefresh ?? 'Sleep plan needs refreshing',
+              l?.sleepDetailPlanNeedsRefreshBody ??
+                  'The saved plan no longer matches the current data. It will '
+                      'return after recalculation succeeds.',
+              icon: LucideIcons.refreshCw,
+            )
+          else ...[
+            Text(
+              l?.sleepPlanningEstimate ?? 'Estimated sleep plan',
+              style: F.cap.copyWith(color: p.ink2),
+            ),
+            SleepPlanSummary(d, showShortfall: true),
+            if ((d.missingPlanDays ?? 0) > 0)
+              Text(
+                l?.sleepPlanningMissing(d.missingPlanDays!) ??
+                    '${d.missingPlanDays} recent days are incomplete. The total '
+                        'shortfall and recommendation are unavailable.',
+                style: F.cap.copyWith(color: p.ink3),
+              )
+            else if (d.need.isEmpty && d.baselineMin == null)
+              StatusCard.forMetric(
+                    l?.sleepDetailSleepNeedNotEstablished ??
+                        'Sleep need not established',
+                    d.need,
+                    l: l,
+                  ) ??
+                  const SizedBox.shrink(),
+          ],
+        ],
       ],
     );
   }
@@ -339,18 +378,7 @@ class _StrainPreview extends StatelessWidget {
           ),
         ),
         const SizedBox(height: S.x2),
-        if (d.zoneMin case final List<int> zones)
-          Wrap(
-            spacing: S.x3,
-            runSpacing: S.x1,
-            children: [
-              for (var i = 0; i < zones.length; i++)
-                Text(
-                  'Z${i + 1} · ${zones[i]} min',
-                  style: F.over.copyWith(color: p.ink2),
-                ),
-            ],
-          ),
+        if (d.zoneMin case final List<int> zones) ZoneMinutesRow(zones),
         if (d.coveragePct != null) ...[
           const SizedBox(height: S.x2),
           Text(

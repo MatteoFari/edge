@@ -52,6 +52,8 @@ List<Map<String, dynamic>> _synthDays(
       if (withSleep) 'onset_sec': onsetSec,
       if (withSleep) 'wake_sec': wakeSec,
       if (withSleep) 'tst_min': tstMin,
+      if (withSleep) 'sleep_complete': true,
+      if (withSleep) 'nap_min': 0,
       if (withSleep)
         'hypnogram': [
           // start/end are epoch SECONDS; map mod-day to clock minutes.
@@ -419,7 +421,8 @@ void main() {
       // The old `_median(effs) ?? 88.0` was an invented baseline: bedtime is
       // "wake − need ÷ efficiency", so the substitution moved the recommended
       // bedtime by real minutes for a user who had never had one measured.
-      final days = _synthDays(30);
+      final days = _synthDays(40);
+      days.last.addAll({'is_today': true, 'strain': 0});
       final coach =
           (buildCrossDayBundle(days, const {})['sleep_coach'] as Map);
       expect((coach['bedtime'] as Map)['value'], '—');
@@ -427,7 +430,8 @@ void main() {
 
       // …and the SAME series with a measured efficiency does produce one, so
       // the assertion above is about the efficiency and not about `need`.
-      final withEff = _synthDays(30);
+      final withEff = _synthDays(40);
+      withEff.last.addAll({'is_today': true, 'strain': 0});
       for (final d in withEff) {
         d['efficiency'] = 92.0;
       }
@@ -640,7 +644,7 @@ void _wiredFamilies() {
     });
 
     test('changing next sleep target cannot change completed-night performance', () {
-      final days = _synthDays(30);
+      final days = _synthDays(40);
       days.last.addAll({'is_today': true, 'sleep_complete': true,
         'strain': 0, 'nap_min': 0, 'sleep_plan_reference': {
           'model': 'observed_sleep_target_v1', 'need_sec': 8 * 3600,

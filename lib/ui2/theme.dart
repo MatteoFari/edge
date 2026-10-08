@@ -596,10 +596,10 @@ class Motion {
 
   /// Elapsed time before a successful status becomes visually quiet. This
   /// delay still applies with reduced motion; its size/colour transition does not.
-  static const statusSettle = Duration(seconds: 4);
+  static const statusSettle = Duration(seconds: 1);
 
   /// Delay before the revealed Coach label rests as an icon.
-  static const coachSettle = Duration(seconds: 1);
+  static const coachSettle = Duration(milliseconds: 2500);
 
   /// Seven 650 ms shape changes in the indeterminate M3 loading sequence.
   static const loadingCycle = Duration(milliseconds: 4550);

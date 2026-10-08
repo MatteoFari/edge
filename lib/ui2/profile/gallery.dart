@@ -911,6 +911,9 @@ Map<String, Widget> extraCases() => {
           ),
         );
       }),
+      'zone_minutes': const Surface(
+        child: ZoneMinutesRow([212, 96, 41, 18, 4]),
+      ),
       'chart_macro_ring': Builder(builder: (c) {
         final p = P.of(c);
         return Surface(

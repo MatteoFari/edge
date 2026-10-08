@@ -2830,5 +2830,44 @@
   "settingsHomeAiBriefingSub": "在首页显示卡片。隐藏卡片会保留已保存的简报",
   "@settingsHomeAiBriefingSub": {
     "description": "Explains that hiding the Home briefing card does not delete saved briefings."
+  },
+  "sleepPlanningEstimate": "估算睡眠计划",
+  "sleepPlanningBaseline": "基础睡眠估算",
+  "sleepPlanningExtra": "建议增加的睡眠",
+  "sleepPlanningTotal": "下一次睡眠建议",
+  "sleepPlanningRecentShortfall": "近期睡眠不足",
+  "sleepPlanningEstimateBody": "基于已记录睡眠的参考，并非生理需求的测量。额外睡眠按比例计算并设有上限。",
+  "sleepPlanningNightShortfall": "{day}：比睡眠参考少 {duration}。",
+  "@sleepPlanningNightShortfall": {
+    "placeholders": {
+      "day": {
+        "type": "String"
+      },
+      "duration": {
+        "type": "String"
+      }
+    }
+  },
+  "sleepPlanningMissing": "最近有 {count} 天数据不完整，无法提供总睡眠不足和建议。",
+  "@sleepPlanningMissing": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "sleepPlanningPolicy": "七天估算：保留{retention}%，增加{fraction}%，最多{cap}。这是计划规则，并非已证实的恢复公式。总量保持在6至11小时之间。",
+  "@sleepPlanningPolicy": {
+  "placeholders": {
+    "retention": {
+      "type": "String"
+    },
+    "fraction": {
+      "type": "String"
+    },
+    "cap": {
+      "type": "String"
+    }
   }
+}
 }

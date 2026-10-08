@@ -53,6 +53,10 @@ Map<String, dynamic> buildCrossDayBundle(
   Map<String, dynamic> profile, {
   List<String> cycleStartDates = const [],
   Map<String, List<String>> sessionTypesByDate = const {},
+  String? sleepPlanningDay,
+  Object? sleepPlanningAnchor,
+  List<Map<String, dynamic>> sleepPlanningAnchorDays = const [],
+  Set<String> sleepPlanningExcludedDays = const {},
 }) {
   final days = daysOldestFirst;
   final n = days.length;
@@ -161,12 +165,6 @@ Map<String, dynamic> buildCrossDayBundle(
     totalDaysObserved: allDurH.length,
   );
 
-  // sleep debt: recent = last up-to-7 durations; free = free-day durations.
-  final recentDurH = allDurH.length <= 7
-      ? allDurH
-      : allDurH.sublist(allDurH.length - 7);
-  final sleepDebt = ana.sleepDebt(recentDurH, freeDurH);
-
   // ── percentile-of-you for today vs history (history = all-but-last) ────────
   // rhr is LOWER-is-better — the same orientation `_glassInput` ten lines below
   // has always passed for this exact list. Unoriented, a night with the user's
@@ -183,8 +181,13 @@ Map<String, dynamic> buildCrossDayBundle(
   final gbInputs = <ana.GlassBoxInput>[];
   final gbRmssd = _glassInput('hrv', rmssdList, ana.wHrv, lowerIsBetter: false);
   if (gbRmssd != null) gbInputs.add(gbRmssd);
-  final gbRhr =
-      _glassInput('rhr', rhrList, ana.wRhr, lowerIsBetter: true, quantum: 1);
+  final gbRhr = _glassInput(
+    'rhr',
+    rhrList,
+    ana.wRhr,
+    lowerIsBetter: true,
+    quantum: 1,
+  );
   if (gbRhr != null) gbInputs.add(gbRhr);
   final gbResp = _glassInput('resp', respList, ana.wResp, lowerIsBetter: true);
   if (gbResp != null) gbInputs.add(gbResp);
@@ -230,7 +233,8 @@ Map<String, dynamic> buildCrossDayBundle(
   final sriJson = sri.toJson((v) => v.toJson());
   final sriValue = sriJson['value'];
   if (sriValue is Map) {
-    for (final p in ((sriValue['pairs'] as List?) ?? const []).whereType<Map>()) {
+    for (final p
+        in ((sriValue['pairs'] as List?) ?? const []).whereType<Map>()) {
       final d = (p['day_index'] as num?)?.toInt();
       if (d == null || d <= 0 || d >= sriDates.length) continue;
       p['prev_date'] = sriDates[d - 1];
@@ -251,9 +255,7 @@ Map<String, dynamic> buildCrossDayBundle(
   final recentFrom = math.max(0, n - recentNights);
   final overreaching = ana.overreachingConjunction(
     load: load,
-    rhrRecent: [
-      for (var i = recentFrom; i < n; i++) settled(i, rhrList[i]),
-    ],
+    rhrRecent: [for (var i = recentFrom; i < n; i++) settled(i, rhrList[i])],
     rhrBaselineWindow: [
       for (var i = math.max(0, recentFrom - 28); i < recentFrom; i++)
         ?rhrList[i],
@@ -283,137 +285,166 @@ Map<String, dynamic> buildCrossDayBundle(
   // ── circadian rhythm: nonparametric battery + 24 h cosinor ────────────────
   final circadian = _crossDayCircadian(days);
 
-  // ── SLEEP COACH: need (baseline + debt + strain − naps) + performance +
-  //    recommended bedtime + cycle-aligned wake (all forward-looking for tonight).
-  // baseline need = the personal OSD (from sleepDebt) when known, else 8 h.
-  final osdH = sleepDebt.present ? sleepDebt.value!.osdHours : null;
-  // Personal optimal sleep duration, floored/capped to a physiological band:
-  // the OSD estimate is noisy with few nights and can read implausibly low
-  // (e.g. 5.6 h), which would push the recommended bedtime far too late. Adults
-  // need ~7-9.5 h, so clamp into that range.
-  //
-  // NO 8 h DEFAULT. It used to substitute the population mean when there was no
-  // personal estimate, and every number built on it — tonight's need, the
-  // recommended bedtime, the cycle-aligned wake time and sleep performance —
-  // was then a population figure presented as the user's own, with nothing on
-  // screen saying so. Absent input yields an absent metric; the coach fills in
-  // once enough nights exist to estimate an OSD.
-  final double? baselineNeedSec =
-      osdH == null ? null : (osdH.clamp(7.0, 9.5)) * 3600.0;
-  final debtSec =
-      (sleepDebt.present ? (sleepDebt.value!.debtHours ?? 0.0) : 0.0) * 3600.0;
-  const noOsd = ana.Metric<ana.SleepNeed>.absent(
-    tier: ana.Tier.estimate,
-    inputs_used: ['osd_hours'],
-    note: 'need_baseline:have=0,need=1',
+  // Observed-reference planning. All policy/maths live in analytics; Edge
+  // supplies unique local-calendar records and serializes the result. Weekend
+  // sleep is not evidence of unrestricted sleep or biological need.
+  final todayRowsForPlan = days.where((d) => d['is_today'] == true).toList();
+  final planDate =
+      sleepPlanningDay ??
+      (todayRowsForPlan.length == 1
+          ? todayRowsForPlan.single['date'] as String?
+          : days.isEmpty
+          ? null
+          : days.last['date'] as String?);
+  final settledForPlan =
+      days
+          .where(
+            (d) => d['sleep_episode_settled'] == true && d['unsettled'] != true,
+          )
+          .toList()
+        ..sort((a, b) => (a['date'] as String).compareTo(b['date'] as String));
+  final nightDate = settledForPlan.isEmpty
+      ? planDate
+      : settledForPlan.last['date'] as String?;
+  final planOrdinal = _calendarOrdinal(planDate);
+  final nightOrdinal = _calendarOrdinal(nightDate);
+  final history = <ana.SleepPlanningDay>[
+    // Anchor-only rows never enter other cross-day metrics. Existing day
+    // records take precedence if the retained window still overlaps history.
+    for (final d in [
+      ...days,
+      ...sleepPlanningAnchorDays.where(
+        (a) => !days.any((d) => d['date'] == a['date']),
+      ),
+    ])
+      if (_calendarOrdinal(d['date'] as String?) case final ordinal?)
+        ana.SleepPlanningDay(
+          ordinal,
+          sleepSec:
+              _numOrNull(d['planning_tst_sec']) ??
+              (_numOrNull(d['tst_min']) == null
+                  ? null
+                  : _numOrNull(d['tst_min'])! * 60),
+          acceptedNapSec: _numOrNull(d['nap_min']) == null
+              ? null
+              : _numOrNull(d['nap_min'])! * 60,
+          complete:
+              !sleepPlanningExcludedDays.contains(d['date']) &&
+              (d['sleep_complete'] == true || d['reported_sleep'] == true) &&
+              d['unsettled'] != true,
+        ),
+  ];
+  final reference = ana.experimentalSleepReference(
+    history,
+    nightOrdinal ?? 0,
+    anchor: ana.SleepPlanningReference.fromJson(sleepPlanningAnchor),
   );
-  ana.Metric<ana.SleepNeed> needAt({
-    required double dayStrain,
-    required double napCreditSec,
-  }) =>
-      baselineNeedSec == null
-          ? noOsd
-          : ana.sleepNeed(
-              baselineNeedSec: baselineNeedSec,
-              sleepDebtSec: debtSec < 0 ? 0.0 : debtSec,
-              dayStrain: dayStrain,
-              napCreditSec: napCreditSec,
-            );
-  // TODAY's strain only. `_lastNum` walked backward to the last non-null, so a
-  // day whose strain compute abstained built tonight's bonus out of an EARLIER
-  // day's workout — imputation (AGENTS §3.3), and invisible, since the number
-  // lands inside `need_sec` with nothing surfacing it.
-  //
-  // Unlike the nap credit below, 0 here is NOT the cautious direction: strain is
-  // ADDED (up to 45 min via sleepNeed's strainBonusSec), so abstaining removes
-  // sleep from the recommendation rather than adding it. It is still right, on
-  // two grounds that are not "it's safe":
-  //   - Carrying yesterday forward is not a safety margin either. It inflates
-  //     need only when yesterday happened to be harder than today, and deflates
-  //     it when yesterday was a rest day — noise around the true value, not a
-  //     conservative bound, and forbidden regardless.
-  //   - Strain is a same-day ACCUMULATING quantity that starts at 0 and only
-  //     rises. Before today logs anything, 0 is where it genuinely sits, not a
-  //     substituted default. The bonus grows as the day's real strain arrives.
-  // Because that direction is not the cautious one, the substitution is not
-  // allowed to be silent: `strain_bonus_min` below reports what the bonus
-  // actually added, and stays NULL (never 0) when today produced no reading —
-  // which is the case where up to 45 min of need went missing.
-  final todayStrainNum = _todayNum(days, 'strain');
-  final todayStrain = todayStrainNum ?? 0.0;
-  // TODAY's naps only, and minutes ASLEEP (the analytics detector reports TST
-  // and in-bed separately now). No reading means NO credit — that leaves the
-  // recommendation slightly high, which is the safe direction; reaching back a
-  // day to find a number would be the unsafe one.
-  final todayNapMin = _todayNum(days, 'nap_min');
-  final todayNapSec = (todayNapMin ?? 0.0) * 60.0;
-  final need = needAt(dayStrain: todayStrain, napCreditSec: todayNapSec);
-  // What the credit ACTUALLY changed. `sleepNeed` clamps to [6 h, 11 h] AFTER
-  // subtracting, so a large credit against a low baseline is only partly
-  // realized — a 3 h nap does not remove 3 h of need. Disclosing the raw nap
-  // minutes would state a reduction the number above never took.
-  final needNoNap = needAt(dayStrain: todayStrain, napCreditSec: 0.0);
-  final appliedNapCreditMin = (todayNapMin == null ||
-          !need.present ||
-          !needNoNap.present)
+  final planning = ana.observedSleepPlan(
+    history,
+    targetDay: nightOrdinal ?? 0,
+    currentDay: planOrdinal,
+    reference: reference.value,
+    dayStrain: _todayNum(days, 'strain'),
+  );
+  final plan = planning.value!;
+  final need = plan.nextSleepSec == null
+      ? ana.Metric<ana.SleepNeed>.absent(
+          tier: ana.Tier.estimate,
+          inputs_used: planning.inputs_used,
+          note: reference.value == null
+              ? reference.note
+              : 'need_input:name=complete_recent_sleep_naps_strain',
+        )
+      : ana.Metric(
+          value: ana.SleepNeed(plan.nextSleepSec!),
+          confidence: planning.confidence,
+          tier: ana.Tier.estimate,
+          inputs_used: planning.inputs_used,
+          note: planning.note,
+        );
+  final sleepDebt = plan.recentShortfallSec == null
+      ? ana.Metric<double>.absent(
+          tier: ana.Tier.estimate,
+          inputs_used: planning.inputs_used,
+          note: need.note,
+        )
+      : ana.Metric(
+          value: plan.recentShortfallSec,
+          confidence: planning.confidence,
+          tier: ana.Tier.estimate,
+          inputs_used: planning.inputs_used,
+          note: planning.note,
+        );
+  final appliedNapCreditMin = plan.napCreditSec == null
       ? null
-      : ((needNoNap.value!.needSec - need.value!.needSec) / 60).round();
-  // What the strain bonus ACTUALLY added, measured the same way `nap_credit_min`
-  // measures the nap: re-run at the real operating point with the strain zeroed
-  // and diff. The [6 h, 11 h] clamp applies AFTER adding, so against a high
-  // baseline + debt the bonus is only partly realized — disclosing the raw
-  // (strain/21)*45 would state an increase `need_sec` never took.
-  //
-  // Null when today produced no strain reading. That is the ONE case that
-  // matters most here: a confident 0 says "you rested today", while null says
-  // "we could not measure today's strain, so tonight's need is short by up to
-  // 45 min". Collapsing the two would re-hide exactly what the today-scoping
-  // fix above exposed.
-  final needNoStrain = needAt(dayStrain: 0.0, napCreditSec: todayNapSec);
-  final appliedStrainBonusMin = (todayStrainNum == null ||
-          !need.present ||
-          !needNoStrain.present)
+      : plan.napCreditSec! / 60;
+  final appliedStrainBonusMin = plan.strainBonusSec == null
       ? null
-      : ((need.value!.needSec - needNoStrain.value!.needSec) / 60).round();
+      : plan.strainBonusSec! / 60;
+
   // Performance belongs to this completed night, with the target committed
   // BEFORE its onset. Tonight's need can change without rewriting that result.
   final lastTstMin = _todayNum(days, 'tst_min');
   final todayRows = days.where((d) => d['is_today'] == true).toList();
   final night = todayRows.length == 1 ? todayRows.single : null;
-  final nightReference = sleepPlanReference(night?['sleep_plan_reference'],
-      (night?['onset_sec'] as num?)?.toInt(),
-      nightDay: (night?['date'] as String?) ?? '');
+  final nightReference = sleepPlanReference(
+    night?['sleep_plan_reference'],
+    (night?['onset_sec'] as num?)?.toInt(),
+    nightDay: (night?['date'] as String?) ?? '',
+  );
   final nightTarget = (nightReference?['need_sec'] as num?)?.toDouble();
-  final completeNight = night?['sleep_complete'] == true &&
-      night?['unsettled'] != true;
+  final completeNight =
+      night?['sleep_complete'] == true &&
+      night?['unsettled'] != true &&
+      !sleepPlanningExcludedDays.contains(night?['date']);
   final perf = (completeNight && nightTarget != null && lastTstMin != null)
       ? ana.sleepPerformance(lastTstMin * 60.0, nightTarget)
       : ana.Metric<ana.SleepPerformance>.absent(
           tier: ana.Tier.estimate,
           inputs_used: const ['complete_tst', 'prospective_sleep_target'],
-          note: !completeNight ? needInputNote('complete_tst')
+          note: !completeNight
+              ? needInputNote('complete_tst')
               : needInputNote('prospective_sleep_target'),
         );
   // A target belongs to the next canonical night, independently of the order
   // in which days finish deriving. Missing nights cannot shift it forward.
   // Settled bounds identify the episode; full capture is separately required
   // above to compare its observed sleep with a target.
-  final settledNights = days.where((d) => d['sleep_episode_settled'] == true &&
-      d['unsettled'] != true &&
-      d['date'] is String && d['onset_sec'] is num && d['wake_sec'] is num &&
-      (d['wake_sec'] as num) > (d['onset_sec'] as num)).toList()
-    ..sort((a, b) => (b['wake_sec'] as num).compareTo(a['wake_sec'] as num));
+  final settledNights =
+      days
+          .where(
+            (d) =>
+                d['sleep_episode_settled'] == true &&
+                d['unsettled'] != true &&
+                d['date'] is String &&
+                d['onset_sec'] is num &&
+                d['wake_sec'] is num &&
+                (d['wake_sec'] as num) > (d['onset_sec'] as num),
+          )
+          .toList()
+        ..sort(
+          (a, b) => (b['wake_sec'] as num).compareTo(a['wake_sec'] as num),
+        );
   final referenceNight = settledNights.isEmpty ? null : settledNights.first;
   final referenceDay = referenceNight?['date'] as String?;
-  final referenceEnd = referenceDay == null ? null : localDayEndSec(referenceDay);
-  final targetDay = referenceEnd == null ? null :
-      dayLabelOf(DateTime.fromMillisecondsSinceEpoch(referenceEnd * 1000));
+  final referenceEnd = referenceDay == null
+      ? null
+      : localDayEndSec(referenceDay);
+  final targetDay = referenceEnd == null
+      ? null
+      : dayLabelOf(DateTime.fromMillisecondsSinceEpoch(referenceEnd * 1000));
   // typical wake clock-minute + efficiency from recent days (medians).
   final wakeMins = <double>[
     for (final d in days)
-      if (d['wake_sec'] != null) _localTodMin((d['wake_sec'] as num).toInt()),
+      if (d['wake_sec'] != null &&
+          !sleepPlanningExcludedDays.contains(d['date']))
+        _localTodMin((d['wake_sec'] as num).toInt()),
   ];
-  final effs = <double>[for (final d in days) ?_numOrNull(d['efficiency'])];
+  final effs = <double>[
+    for (final d in days)
+      if (!sleepPlanningExcludedDays.contains(d['date']))
+        ?_numOrNull(d['efficiency']),
+  ];
   final typicalWakeMin = _median(wakeMins);
   // NO INVENTED 88 %. Bedtime is "wake − need ÷ efficiency", so a substituted
   // efficiency moves the recommendation by real minutes (at a need of 8 h, 88 %
@@ -539,7 +570,22 @@ Map<String, dynamic> buildCrossDayBundle(
     // that was admitted, and the phase reference. Lets the UI say "5 of 7
     // nights" without re-deriving it from the note.
     'circadian_coverage': circadian.coverage,
-    'sleep_debt': sleepDebt.toJson((v) => v.toJson()),
+    'sleep_debt': sleepDebt.toJson((v) => {'debt_hours': v / 3600}),
+    'sleep_planning': {
+      'excluded_days': sleepPlanningExcludedDays.toList()..sort(),
+      'reference': reference.value?.toJson(),
+      'reference_confidence': reference.confidence,
+      'result': planning.toJson((v) => v.toJson()),
+      'night_day': nightDate,
+      'current_day': planDate,
+      'policy': {
+        'daily_retention': const ana.SleepPlanningPolicy().dailyRetention,
+        'adjustment_fraction':
+            const ana.SleepPlanningPolicy().adjustmentFraction,
+        'max_adjustment_sec': const ana.SleepPlanningPolicy().maxAdjustmentSec,
+        'validated': false,
+      },
+    },
     'readiness_glassbox': glassBox.toJson((v) => v.toJson()),
     'brv': brv.toJson((v) => v.toJson()),
     // ── Coaching + fitness (forward-looking, today) ──
@@ -573,6 +619,13 @@ Map<String, dynamic> buildCrossDayBundle(
 }
 
 // ── helpers (all pure) ───────────────────────────────────────────────────────
+
+// Civil-date ordinal: UTC is only an arithmetic grid here, never a day label.
+int? _calendarOrdinal(String? label) {
+  final date = label == null ? null : DateTime.tryParse(label);
+  if (date == null || dayLabelOf(date) != label) return null;
+  return calendarDaysBetween(DateTime(1970), date);
+}
 
 double? _numOrNull(Object? v) => v is num ? v.toDouble() : null;
 
@@ -982,7 +1035,8 @@ _Circadian _crossDayCircadian(List<Map<String, dynamic>> days) {
 /// Append the substrate caveat to an envelope's note, so the claim never leaves
 /// this file without saying what it was computed FROM.
 Map<String, dynamic> _withInputNote(Map<String, dynamic> envelope) {
-  const caveat = 'computed on hourly HEART-RATE means, not accelerometry '
+  const caveat =
+      'computed on hourly HEART-RATE means, not accelerometry '
       '(no multi-day accel survives raw pruning): M10/L5 are the highest- and '
       'lowest-HR windows and RA is an HR amplitude ratio';
   final existing = envelope['note'];
@@ -1029,7 +1083,8 @@ bool _isNextDay(String a, String b) {
 /// the nights either side of it pair up. Returns the date of every grid, padding
 /// included, since `SriPair.dayIndex` indexes those grids, not [days].
 (ana.Metric<ana.SriResult>, List<String>) _crossDaySri(
-    List<Map<String, dynamic>> days) {
+  List<Map<String, dynamic>> days,
+) {
   const epochsPerDay = 1440; // 1-minute epochs over 24 h
   final sleepWake = <bool>[];
   final valid = <bool>[];
@@ -1082,8 +1137,9 @@ bool _isNextDay(String a, String b) {
         // segment, so sleep-regularity was always computed with a hole at the
         // boundary. Unwrap the end past 1440 and write back modulo the grid.
         // `endMinRaw == startMin` stays a genuinely empty (sub-minute) segment.
-        final endMin =
-            endMinRaw < startMin ? endMinRaw + epochsPerDay : endMinRaw;
+        final endMin = endMinRaw < startMin
+            ? endMinRaw + epochsPerDay
+            : endMinRaw;
         final span = math.min(endMin - startMin, epochsPerDay);
         // 'unobserved' is the band seeing nothing (off wrist, lost contact):
         // neither asleep nor awake, so those minutes stay uncovered.
@@ -1112,8 +1168,12 @@ bool _isNextDay(String a, String b) {
   // out the half-unobserved weekend the floor exists for, and it does NOT move
   // the published SRI: every accepted epoch counts toward the total whether or
   // not its pair is emitted.
-  final m =
-      ana.phillipsSri(sleepWake, epochsPerDay, valid: valid, minPairCases: 240);
+  final m = ana.phillipsSri(
+    sleepWake,
+    epochsPerDay,
+    valid: valid,
+    minPairCases: 240,
+  );
   final r = m.value;
   if (r == null) return (m, gridDates);
   // phillipsSri sizes `days` and confidence off the grid length, so every

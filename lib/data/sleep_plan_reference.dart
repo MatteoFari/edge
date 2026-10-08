@@ -1,4 +1,26 @@
 const sleepPlanSettlingMarginSec = 60 * 60;
+// Admission tolerance for isolated missing samples, not sleep imputation.
+// Both bounds must hold; unknown or substantial gaps remain incomplete.
+const sleepPlanMaxGapSec = 30;
+const sleepPlanMaxGapFraction = 0.005;
+
+/// Pending corrections may have outlived their recordings. A fresh plan can
+/// use the remaining history only when it explicitly excluded those nights.
+/// The source-context check still guards changes to the correction revisions.
+bool sleepPlanOverridesHandled(Map context, Object? planning) {
+  final pending = context['pending_overrides'];
+  if (pending is! List) return false;
+  if (pending.isEmpty) return true;
+  final excluded = planning is Map ? planning['excluded_days'] : null;
+  if (excluded is! List) return false;
+  return pending.every(
+    (entry) =>
+        entry is List &&
+        entry.length == 2 &&
+        entry.first is String &&
+        excluded.contains(entry.first),
+  );
+}
 
 /// The prospective target saved before this night began. It is a planning
 /// estimate, not a measurement of biological sleep need. Missing legacy
@@ -54,6 +76,7 @@ double? nightSleepTargetSec(Map<String, dynamic> bundle) {
 bool sleepPlanNightComplete(
   Map<String, dynamic> bundle, {
   required bool partial,
+  bool settledLegacy = false,
 }) {
   final sleep = bundle['sleep'];
   final accounting = sleep is Map ? sleep['accounting'] : null;
@@ -74,14 +97,18 @@ bool sleepPlanNightComplete(
       tst <= inBed &&
       observed is num &&
       observed.isFinite &&
+      observed > 0 &&
       observed <= inBed &&
-      observed == inBed &&
+      tst <= observed &&
+      inBed - observed <= sleepPlanMaxGapSec &&
+      (inBed - observed) / inBed <= sleepPlanMaxGapFraction &&
       onset is num &&
       onset.isFinite &&
       wake is num &&
       wake.isFinite &&
       wake > onset &&
-      edge is num &&
-      edge.isFinite &&
-      edge >= wake / 1000 + sleepPlanSettlingMarginSec;
+      ((edge is num &&
+              edge.isFinite &&
+              edge >= wake / 1000 + sleepPlanSettlingMarginSec) ||
+          (edge == null && settledLegacy));
 }

@@ -341,25 +341,27 @@ class _DayStrainDetailState extends State<DayStrainDetail> {
       Section(
         l?.dayStrainTimeInZonesSection ?? 'Time in zones',
         Surface(
-          child: ChartFrame(
-            title: l?.dayStrainZonesChartTitle ?? 'TIME IN ZONES',
-            unit: 'minutes',
-            height: 10,
-            legend: [
-              for (var i = 0; i < 5; i++)
-                ('Z${i + 1} · ${z[i]}m', ZoneBar.cols(p)[i]),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              ChartFrame(
+                title: l?.dayStrainZonesChartTitle ?? 'TIME IN ZONES',
+                unit: l?.workoutMinutesUnit ?? 'minutes',
+                height: 10,
+                child: CustomPaint(
+                  size: Size.infinite,
+                  painter: ZoneBar([for (final v in z) v / total], p),
+                ),
+              ),
+              const SizedBox(height: S.x3),
+              ZoneMinutesRow(z),
+              const SizedBox(height: S.x2),
+              // Keep this day's zone source beside its distribution.
+              Text(
+                zonesWhy(d.zoneSource, d.zoneMaxHr, l),
+                style: F.cap.copyWith(color: p.ink3),
+              ),
             ],
-            // TS-03/TS-04 — the edges, and where THIS day's came from. Stated
-            // per day, not as a standing hedge: the same screen tomorrow can be
-            // banded on a measured ceiling, and a footnote that still said
-            // "estimated from your age" would then be false. The 28-day
-            // distribution is NOT here — it lives one tap away and is gated on
-            // the same anchors (TS-05).
-            footnote: zonesWhy(d.zoneSource, d.zoneMaxHr, l),
-            child: CustomPaint(
-              size: Size.infinite,
-              painter: ZoneBar([for (final v in z) v / total], p),
-            ),
           ),
         ),
         // Progressive disclosure: this day screen gains a LINK, not a row. The

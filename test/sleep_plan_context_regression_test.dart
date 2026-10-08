@@ -132,6 +132,57 @@ void main() {
   });
 
   test(
+    'raw-less old corrections stay saved without blocking unrelated plans or retrying forever',
+    () async {
+      final old = previousDay(10);
+      await result(old);
+      await LocalDb.putSleepOverride(
+        dayId: old,
+        onsetTs: onset - 10 * 86400,
+        offsetTs: offset - 10 * 86400,
+        source: 'manual',
+      );
+      final retained = await LocalDb.dayResult(old);
+      final override = await LocalDb.getSleepOverride(old);
+      final scalars = await db.query('metric_series');
+      expect(await LocalDb.sleepPlanOverrideDaysWithRecordings(), isEmpty);
+      expect(await repo.getInsights(), contains('sleep_plan_stale'));
+      expect(
+        await DerivationEngine().refreshActivityReviews(const Profile()),
+        true,
+      );
+      final insights = await repo.getInsights();
+      expect(insights, isNot(contains('sleep_plan_stale')));
+      expect(insights['sleep_planning']['excluded_days'], [old]);
+      expect(await LocalDb.sleepPlanRefreshPending(), false);
+      expect(await LocalDb.pendingSleepPlanOverrideDays(), {old});
+      expect(await LocalDb.dayResult(old), retained);
+      expect(await LocalDb.getSleepOverride(old), override);
+      expect(await db.query('metric_series'), scalars);
+      await LocalDb.close();
+      db = await LocalDb.instance;
+      final stored = await LocalDb.baseline('crossday');
+      expect(
+        await DerivationEngine().refreshActivityReviews(const Profile()),
+        true,
+      );
+      expect(await LocalDb.baseline('crossday'), stored);
+      expect(await repo.getInsights(), isNot(contains('sleep_plan_stale')));
+      expect(
+        (await LocalDb.baseline('recovery_calibration'))!['payload_json'],
+        '{"fixed":72}',
+      );
+      await LocalDb.putSleepOverride(
+        dayId: old,
+        onsetTs: onset - 10 * 86400 + 60,
+        offsetTs: offset - 10 * 86400,
+        source: 'manual',
+      );
+      expect(await repo.getInsights(), contains('sleep_plan_stale'));
+    },
+  );
+
+  test(
     'same-day failed crossday refresh hides only the stale sleep plan; restart retries it',
     () async {
       final stored = (await LocalDb.baseline('crossday'))!['payload_json'];
@@ -192,6 +243,39 @@ void main() {
         (await LocalDb.baseline('recovery_calibration'))!['payload_json'],
         '{"fixed":72}',
       );
+    },
+  );
+
+  test(
+    'only restored recordings in a correction window make it eligible for retry',
+    () async {
+      final old = previousDay(10);
+      final date = DateTime.parse(old);
+      final oldOnset =
+          DateTime(date.year, date.month, date.day, 1).millisecondsSinceEpoch ~/
+          1000;
+      await LocalDb.putSleepOverride(
+        dayId: old,
+        onsetTs: oldOnset,
+        offsetTs: oldOnset + 7 * 3600,
+        source: 'manual',
+      );
+      Future<void> recording(int ts) => db.insert('decoded_onehz', {
+        'device_id': LocalDb.kPrimaryDeviceId,
+        'ts_ms': ts * 1000,
+        'rec_ts': ts,
+        'counter': ts,
+        'hr': 55,
+        'ax': 0.0,
+        'ay': 0.0,
+        'az': 1.0,
+        'device_family': 'gen4',
+      });
+      await recording(onset);
+      expect(await LocalDb.sleepPlanOverrideDaysWithRecordings(), isEmpty);
+      await recording(oldOnset);
+      expect(await LocalDb.sleepPlanOverrideDaysWithRecordings(), {old});
+      expect(await LocalDb.pendingSleepPlanOverrideDays(), {old});
     },
   );
 
@@ -584,7 +668,7 @@ void main() {
   );
 
   test(
-    'busy or unavailable local derivation leaves correction work durable and releases its lock',
+    'busy derivation stays queued; missing recordings publish an honest unknown plan',
     () async {
       await LocalDb.deleteSleepOverride(today);
       DerivationEngine.debugRunning = true;
@@ -595,9 +679,13 @@ void main() {
       DerivationEngine.debugRunning = false;
       expect(
         await DerivationEngine().refreshActivityReviews(const Profile()),
-        isFalse,
+        isTrue,
       );
       expect(await LocalDb.pendingSleepPlanOverrideDays(), {today});
+      expect(await LocalDb.sleepPlanRefreshPending(), false);
+      final insights = await repo.getInsights();
+      expect(insights, isNot(contains('sleep_plan_stale')));
+      expect(insights['sleep_coach']['need']['value'], '—');
       expect(DerivationEngine().running, isFalse);
     },
   );

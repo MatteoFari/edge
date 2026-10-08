@@ -23,6 +23,7 @@ const _measured = HomeData(
   readiness: Metric(value: 73),
   sleepMin: Metric(value: 431),
   sleepNeedMin: Metric(value: 487),
+  sleepTargetMin: Metric(value: 487),
   strain: Metric(value: 12.4),
   rhr: Metric(value: 51),
   steps: Metric(value: 2432),
@@ -259,7 +260,7 @@ void main() {
     app.connection = 'connected';
     app.notifyListeners();
     await t.pumpAndSettle();
-    expect(find.text('Synced through 11:06'), findsNothing);
+    expect(find.text('Synced through 11:06'), findsOneWidget);
     expect(
       find.byWidgetPredicate(
         (w) =>
@@ -281,6 +282,75 @@ void main() {
     expect(find.byIcon(LucideIcons.check), findsNothing);
     // Losing the link never changes the saved data frontier.
     expect(app.frontier, DateTime(2026, 10, 7, 11, 6));
+  });
+
+  testWidgets('saved sync time stays visible through sync and disconnection', (
+    t,
+  ) async {
+    t.view.physicalSize = const Size(320, 1200);
+    t.view.devicePixelRatio = 1;
+    addTearDown(t.view.reset);
+    final app = _HeaderApp();
+    addTearDown(app.dispose);
+    final saved = find.byKey(const ValueKey('home-synced-through'));
+    await t.pumpWidget(_frame(_header(), app: app, reduceMotion: true));
+    await t.pumpAndSettle();
+    expect(saved, findsNothing);
+
+    app.frontier = DateTime(2026, 10, 6, 23, 40);
+    app.notifyListeners();
+    await t.pumpAndSettle();
+    expect(
+      t.widget<Text>(saved).data,
+      syncedThroughLabel(app.frontier, '2026-10-07'),
+    );
+    expect(t.widget<Text>(saved).data, contains('6'));
+    app.syncing = true;
+    app.notifyListeners();
+    await t.pumpAndSettle();
+    expect(
+      t.widget<Text>(saved).data,
+      syncedThroughLabel(app.frontier, '2026-10-07'),
+    );
+
+    app.syncing = false;
+    app.connection = 'disconnected';
+    app.notifyListeners();
+    for (final brightness in Brightness.values) {
+      await t.pumpWidget(
+        _frame(
+          _header(),
+          app: app,
+          brightness: brightness,
+          scale: 3.1,
+          reduceMotion: true,
+        ),
+      );
+      await t.pumpAndSettle();
+      expect(saved, findsOneWidget);
+      expect(t.widget<Text>(saved).maxLines, isNull);
+      final bounds = t.getRect(saved);
+      expect(bounds.left, greaterThanOrEqualTo(0));
+      expect(bounds.right, lessThanOrEqualTo(320));
+      expect(t.takeException(), isNull);
+    }
+    app.frontier = DateTime(2026, 10, 7, 11, 6);
+    app.notifyListeners();
+    await t.pumpAndSettle();
+    expect(t.widget<Text>(saved).data, 'Synced through 11:06');
+  });
+
+  testWidgets('successful check waits one second before settling', (t) async {
+    final app = _HeaderApp()..frontier = DateTime(2026, 10, 7, 11, 6);
+    addTearDown(app.dispose);
+    await t.pumpWidget(_frame(_header(), app: app, reduceMotion: true));
+    final surface = find.byKey(const ValueKey('home-sync-surface'));
+    expect(t.getSize(surface).width, S.tap);
+    await t.pump(const Duration(milliseconds: 999));
+    expect(t.getSize(surface).width, S.tap);
+    await t.pump(const Duration(milliseconds: 1));
+    await t.pumpAndSettle();
+    expect(t.getSize(surface).width, S.x10 - S.x1);
   });
 
   testWidgets('sync circle morphs beside the smaller date and fixed settings', (
@@ -1049,13 +1119,20 @@ void main() {
   });
 
   testWidgets(
-    'sleep without a computed need has an empty track and no invented target',
+    'next sleep recommendation cannot become last night\'s missing target',
     (t) async {
       await t.pumpWidget(
-        _frame(_metrics(const HomeData(sleepMin: Metric(value: 431)))),
+        _frame(
+          _metrics(
+            const HomeData(
+              sleepMin: Metric(value: 431),
+              sleepNeedMin: Metric(value: 540),
+            ),
+          ),
+        ),
       );
       expect(find.text('7h 11m'), findsOneWidget);
-      expect(find.text('No target yet'), findsOneWidget);
+      expect(find.text('Time asleep'), findsOneWidget);
       expect(_painter<ExpressiveSleepMeter>(t).fraction, isNull);
       expect(find.textContaining('8h 00m'), findsNothing);
     },

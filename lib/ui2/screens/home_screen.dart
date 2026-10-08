@@ -1057,6 +1057,7 @@ class RingTrio extends StatelessWidget {
   final void Function(HomeRingKind)? onExpand;
   final VoidCallback? onClose;
   final String? day;
+  final bool includeCurrentSleepPlan;
 
   const RingTrio({
     super.key,
@@ -1067,6 +1068,7 @@ class RingTrio extends StatelessWidget {
     this.onClose,
     this.day,
     this.detailBuilder,
+    this.includeCurrentSleepPlan = false,
   });
 
   /// Whether ANY of the three has something to draw. When none do, the screen
@@ -1089,6 +1091,7 @@ class RingTrio extends StatelessWidget {
         onClose: onClose,
         day: day,
         detailBuilder: detailBuilder,
+        includeCurrentSleepPlan: includeCurrentSleepPlan,
       );
     }
     final gaps = rings.where((r) => r.why != null).toList();
@@ -1295,7 +1298,7 @@ _RingState _ringOf(HomeRingKind k, HomeData d, AppLocalizations? l) {
             );
     case HomeRingKind.sleep:
       final v = d.sleepMin.value;
-      final need = d.sleepNeedMin.value;
+      final need = d.sleepTargetMin.value;
       return v == null
           ? _gap(
               k,
@@ -1315,11 +1318,10 @@ _RingState _ringOf(HomeRingKind k, HomeData d, AppLocalizations? l) {
               LucideIcons.moon,
               C.blue,
               value: hm(v),
-              // No computed need means no denominator. The hardcoded 480 in
-              // the sleep bundle is not this user's need and must never be
-              // shown as one, so the ring stays open and says so.
+              // Only the target saved before this night can scale its ring.
+              // The next sleep's recommendation belongs in the expanded plan.
               sub: need == null
-                  ? (l?.homeSleepNoTarget ?? 'No target yet')
+                  ? (l?.sleepDetailTimeAsleep ?? 'Time asleep')
                   : (l?.homeOfSpan(hm(need)) ?? 'of ${hm(need)}'),
               frac: need == null || need <= 0 ? null : v / need,
             );
@@ -1575,6 +1577,7 @@ class _ExpressiveMetrics extends StatefulWidget {
   final HomeRingKind? expanded;
   final VoidCallback? onClose;
   final String? day;
+  final bool includeCurrentSleepPlan;
   final Widget Function(HomeRingKind)? detailBuilder;
   const _ExpressiveMetrics({
     required this.rings,
@@ -1585,6 +1588,7 @@ class _ExpressiveMetrics extends StatefulWidget {
     this.onClose,
     this.day,
     this.detailBuilder,
+    this.includeCurrentSleepPlan = false,
   });
   @override
   State<_ExpressiveMetrics> createState() => _ExpressiveMetricsState();
@@ -1782,6 +1786,8 @@ class _ExpressiveMetricsState extends State<_ExpressiveMetrics>
                                           ),
                                           kind: r.kind,
                                           day: widget.day ?? todayLabel(),
+                                          includeCurrentPlan:
+                                              widget.includeCurrentSleepPlan,
                                         ),
                                       ),
                                     ),
@@ -1920,7 +1926,13 @@ class _ExpressiveMetricsState extends State<_ExpressiveMetrics>
 class _MetricPreviewBody extends StatefulWidget {
   final HomeRingKind kind;
   final String day;
-  const _MetricPreviewBody({super.key, required this.kind, required this.day});
+  final bool includeCurrentPlan;
+  const _MetricPreviewBody({
+    super.key,
+    required this.kind,
+    required this.day,
+    this.includeCurrentPlan = false,
+  });
   @override
   State<_MetricPreviewBody> createState() => _MetricPreviewBodyState();
 }
@@ -1951,7 +1963,12 @@ class _MetricPreviewBodyState extends State<_MetricPreviewBody>
     try {
       final data = repo == null
           ? HomeMetricPreviewData(day: widget.day)
-          : await HomeMetricPreviewData.load(repo, widget.kind, widget.day);
+          : await HomeMetricPreviewData.load(
+              repo,
+              widget.kind,
+              widget.day,
+              includeCurrentPlan: widget.includeCurrentPlan,
+            );
       if (stillNewest(#preview, token)) setState(() => _data = data);
     } catch (_) {
       if (stillNewest(#preview, token)) setState(() => _failed = true);
@@ -2268,6 +2285,9 @@ class HomeData {
 
   final int stepGoal;
   final Metric sleepNeedMin;
+
+  /// The inspected night's prospective target, distinct from the next plan.
+  final Metric sleepTargetMin;
   final Metric bedtime;
   final Map<String, dynamic>? strainTarget;
 
@@ -2318,6 +2338,7 @@ class HomeData {
     this.strain = Metric.empty,
     this.stepGoal = kDefaultStepGoal,
     this.sleepNeedMin = Metric.empty,
+    this.sleepTargetMin = Metric.empty,
     this.bedtime = Metric.empty,
     this.strainTarget,
     this.heldOverNight,
@@ -2344,6 +2365,7 @@ class HomeData {
     strain: strain,
     stepGoal: stepGoal,
     sleepNeedMin: sleepNeedMin,
+    sleepTargetMin: sleepTargetMin,
     bedtime: bedtime,
     strainTarget: strainTarget,
     heldOverNight: heldOverNight,
@@ -2394,6 +2416,7 @@ class HomeData {
       calories: metricOf(strain['calories']),
       caloriesTotal: metricOf(strain['calories_total']),
       sleepMin: metricOf(sleep['duration_min']),
+      sleepTargetMin: metricOf(sleep['need_min']),
       stepGoal: (profile['step_goal'] as num?)?.toInt() ?? kDefaultStepGoal,
     );
   }
@@ -2485,13 +2508,13 @@ class HomeData {
       ],
       strain: metricOf(d('strain')),
       sleepMin: overnightMetric(today, s('duration_min'), l),
+      sleepTargetMin: overnightMetric(today, s('need_min'), l),
       rhr: overnightMetric(today, d('resting_hr'), l),
       steps: metricOf(d('steps')),
       calories: metricOf(d('calories')),
       caloriesTotal: metricOf(d('calories_total')),
       stepGoal: (today['step_goal'] as num?)?.toInt() ?? kDefaultStepGoal,
-      // sleep_coach.need is the COMPUTED need. `sleep.need_min` is a hardcoded
-      // 480 and must never be shown as "your sleep need".
+      // The next sleep's plan is independent of the completed night's target.
       sleepNeedMin: envMetric(
         needEnv,
         needSec == null ? null : needSec / 60,
@@ -2636,154 +2659,174 @@ class ExpressiveHomeHeader extends StatelessWidget {
         : '${weekdayShortName(date.weekday, l)}, ';
     return Padding(
       padding: const EdgeInsets.only(top: S.x3, bottom: S.x5),
-      child: LayoutBuilder(
-        builder: (c, box) {
-          final dateStyle = F.head.copyWith(color: p.ink);
-          final labelStyle = _headerLabelStyle(c);
-          double textWidth(String text, TextStyle style) =>
-              _headerTextSize(c, text, style).width;
-          final arrowWidth = days.isEmpty ? 0.0 : S.x1 + S.x4;
-          const actionsWidth = S.tap;
-          final gaps = S.x1 * 3;
-          final batteryWidth =
-              S.tap + S.x3 + textWidth(batteryLabel, labelStyle);
-          // Choose date abbreviations against the widest state, so the written
-          // month doesn't switch halfway through a sync/processing transition.
-          final widestSync =
-              [
-                    l?.devicesSyncing ?? 'Syncing',
-                    l?.homeHeaderProcessing ?? 'Processing',
-                    l?.homeHeaderSyncIssue ?? 'Sync error',
-                    l?.homeHeaderOffline ?? 'Offline',
-                    l?.bandStatusConnectingTitle ?? 'Connecting',
-                  ]
-                  .map((word) => S.tap + S.x3 + textWidth(word, labelStyle))
-                  .reduce((a, b) => a > b ? a : b);
-          final remainingDate =
-              box.maxWidth -
-              widestSync -
-              S.tap -
-              actionsWidth -
-              gaps -
-              arrowWidth;
-          final shownMonth = textWidth(monthDay, dateStyle) <= remainingDate
-              ? monthDay
-              : shortMonthDay;
-          final dateWidth = textWidth(shownMonth, dateStyle) + arrowWidth;
-          // A single row cannot fit arbitrary accessibility text. Keep complete
-          // words and full tap targets in a scrollable row instead of clipping or
-          // shrinking the user's font. Normal phone sizes never need scrolling.
-          final minRowWidth =
-              dateWidth +
-              actionsWidth +
-              gaps +
-              (widestSync + S.tap > S.tap + batteryWidth
-                  ? widestSync + S.tap
-                  : S.tap + batteryWidth);
-          final rowWidth = minRowWidth > box.maxWidth
-              ? minRowWidth
-              : box.maxWidth;
-          final quietWeekdaySpace =
-              rowWidth - dateWidth - S.tap - batteryWidth - actionsWidth - gaps;
-          final shownWeekday =
-              textWidth(weekday, dateStyle) <= quietWeekdaySpace
-              ? weekday
-              : textWidth(shortWeekday, dateStyle) <= quietWeekdaySpace
-              ? shortWeekday
-              : '';
-          return SingleChildScrollView(
-            key: const ValueKey('home-header-row-scroll'),
-            scrollDirection: Axis.horizontal,
-            child: SizedBox(
-              width: rowWidth,
-              child: Row(
-                key: const ValueKey('home-header-row'),
-                children: [
-                  Expanded(
-                    child: Pressable(
-                      key: const ValueKey('home-day-picker'),
-                      semanticLabel:
-                          l?.metricDetailChooseDayShowing(prettyDay(day, l)) ??
-                          'Choose a day. Showing ${prettyDay(day, l)}',
-                      onTap: days.isEmpty
-                          ? null
-                          : () async {
-                              final picked = await chooseDay(c, days, day);
-                              if (c.mounted &&
-                                  picked != null &&
-                                  picked != day) {
-                                onDay(picked);
-                              }
-                            },
-                      child: Row(
-                        children: [
-                          Flexible(
-                            child: _HomeDayLabel(
-                              weekday: shownWeekday,
-                              monthDay: shownMonth,
-                              compact: label != null,
-                              style: dateStyle,
-                            ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          LayoutBuilder(
+            builder: (c, box) {
+              final dateStyle = F.head.copyWith(color: p.ink);
+              final labelStyle = _headerLabelStyle(c);
+              double textWidth(String text, TextStyle style) =>
+                  _headerTextSize(c, text, style).width;
+              final arrowWidth = days.isEmpty ? 0.0 : S.x1 + S.x4;
+              const actionsWidth = S.tap;
+              final gaps = S.x1 * 3;
+              final batteryWidth =
+                  S.tap + S.x3 + textWidth(batteryLabel, labelStyle);
+              // Choose date abbreviations against the widest state, so the written
+              // month doesn't switch halfway through a sync/processing transition.
+              final widestSync =
+                  [
+                        l?.devicesSyncing ?? 'Syncing',
+                        l?.homeHeaderProcessing ?? 'Processing',
+                        l?.homeHeaderSyncIssue ?? 'Sync error',
+                        l?.homeHeaderOffline ?? 'Offline',
+                        l?.bandStatusConnectingTitle ?? 'Connecting',
+                      ]
+                      .map((word) => S.tap + S.x3 + textWidth(word, labelStyle))
+                      .reduce((a, b) => a > b ? a : b);
+              final remainingDate =
+                  box.maxWidth -
+                  widestSync -
+                  S.tap -
+                  actionsWidth -
+                  gaps -
+                  arrowWidth;
+              final shownMonth = textWidth(monthDay, dateStyle) <= remainingDate
+                  ? monthDay
+                  : shortMonthDay;
+              final dateWidth = textWidth(shownMonth, dateStyle) + arrowWidth;
+              // A single row cannot fit arbitrary accessibility text. Keep complete
+              // words and full tap targets in a scrollable row instead of clipping or
+              // shrinking the user's font. Normal phone sizes never need scrolling.
+              final minRowWidth =
+                  dateWidth +
+                  actionsWidth +
+                  gaps +
+                  (widestSync + S.tap > S.tap + batteryWidth
+                      ? widestSync + S.tap
+                      : S.tap + batteryWidth);
+              final rowWidth = minRowWidth > box.maxWidth
+                  ? minRowWidth
+                  : box.maxWidth;
+              final quietWeekdaySpace =
+                  rowWidth -
+                  dateWidth -
+                  S.tap -
+                  batteryWidth -
+                  actionsWidth -
+                  gaps;
+              final shownWeekday =
+                  textWidth(weekday, dateStyle) <= quietWeekdaySpace
+                  ? weekday
+                  : textWidth(shortWeekday, dateStyle) <= quietWeekdaySpace
+                  ? shortWeekday
+                  : '';
+              return SingleChildScrollView(
+                key: const ValueKey('home-header-row-scroll'),
+                scrollDirection: Axis.horizontal,
+                child: SizedBox(
+                  width: rowWidth,
+                  child: Row(
+                    key: const ValueKey('home-header-row'),
+                    children: [
+                      Expanded(
+                        child: Pressable(
+                          key: const ValueKey('home-day-picker'),
+                          semanticLabel:
+                              l?.metricDetailChooseDayShowing(
+                                prettyDay(day, l),
+                              ) ??
+                              'Choose a day. Showing ${prettyDay(day, l)}',
+                          onTap: days.isEmpty
+                              ? null
+                              : () async {
+                                  final picked = await chooseDay(c, days, day);
+                                  if (c.mounted &&
+                                      picked != null &&
+                                      picked != day) {
+                                    onDay(picked);
+                                  }
+                                },
+                          child: Row(
+                            children: [
+                              Flexible(
+                                child: _HomeDayLabel(
+                                  weekday: shownWeekday,
+                                  monthDay: shownMonth,
+                                  compact: label != null,
+                                  style: dateStyle,
+                                ),
+                              ),
+                              if (days.isNotEmpty) ...[
+                                const SizedBox(width: S.x1),
+                                Icon(
+                                  LucideIcons.chevronDown,
+                                  size: S.x4,
+                                  color: p.ink3,
+                                ),
+                              ],
+                            ],
                           ),
-                          if (days.isNotEmpty) ...[
-                            const SizedBox(width: S.x1),
-                            Icon(
-                              LucideIcons.chevronDown,
-                              size: S.x4,
-                              color: p.ink3,
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: S.x1),
-                  _HomeHeaderPill(
-                    id: 'sync',
-                    complete: complete,
-                    refreshRevision: refreshRevision,
-                    label: label,
-                    description: description,
-                    busy: busy,
-                    icon: icon,
-                    accent: accent,
-                  ),
-                  const SizedBox(width: S.x1),
-                  _HomeHeaderPill(
-                    id: 'battery',
-                    label: batteryLabel,
-                    compact: label != null,
-                    description: batteryDescription,
-                    icon: battery.$2 == true
-                        ? LucideIcons.batteryCharging
-                        : knownBattery && pct < 20
-                        ? LucideIcons.batteryLow
-                        : LucideIcons.battery,
-                    accent: batteryAccent,
-                  ),
-                  const SizedBox(width: S.x1),
-                  Pressable(
-                    semanticLabel:
-                        l?.homeProfileSettings ?? 'Profile and settings',
-                    onTap: () => go(c, const ProfileHome()),
-                    child: SizedBox(
-                      width: S.tap,
-                      height: S.tap,
-                      child: Center(
-                        child: Icon(
-                          LucideIcons.settings,
-                          key: const ValueKey('home-settings-icon'),
-                          size: S.navIcon,
-                          color: p.ink2,
                         ),
                       ),
-                    ),
+                      const SizedBox(width: S.x1),
+                      _HomeHeaderPill(
+                        id: 'sync',
+                        complete: complete,
+                        refreshRevision: refreshRevision,
+                        label: label,
+                        description: description,
+                        busy: busy,
+                        icon: icon,
+                        accent: accent,
+                      ),
+                      const SizedBox(width: S.x1),
+                      _HomeHeaderPill(
+                        id: 'battery',
+                        label: batteryLabel,
+                        compact: label != null,
+                        description: batteryDescription,
+                        icon: battery.$2 == true
+                            ? LucideIcons.batteryCharging
+                            : knownBattery && pct < 20
+                            ? LucideIcons.batteryLow
+                            : LucideIcons.battery,
+                        accent: batteryAccent,
+                      ),
+                      const SizedBox(width: S.x1),
+                      Pressable(
+                        semanticLabel:
+                            l?.homeProfileSettings ?? 'Profile and settings',
+                        onTap: () => go(c, const ProfileHome()),
+                        child: SizedBox(
+                          width: S.tap,
+                          height: S.tap,
+                          child: Center(
+                            child: Icon(
+                              LucideIcons.settings,
+                              key: const ValueKey('home-settings-icon'),
+                              size: S.navIcon,
+                              color: p.ink2,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
                   ),
-                ],
-              ),
+                ),
+              );
+            },
+          ),
+          if (at != null) ...[
+            const SizedBox(height: S.x1),
+            Text(
+              saved,
+              key: const ValueKey('home-synced-through'),
+              style: F.over.copyWith(color: p.ink3),
             ),
-          );
-        },
+          ],
+        ],
       ),
     );
   }
@@ -3629,6 +3672,7 @@ class _HomeScreenState extends State<HomeScreen> with RevisionReload {
                 onClose: () => setState(() => _expanded = null),
                 onOpen: (k) => go(c, metricDetail(k)),
                 detailBuilder: metricDetail,
+                includeCurrentSleepPlan: liveHome,
               )
             else
               Builder(

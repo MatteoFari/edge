@@ -1339,6 +1339,7 @@ class MetricRow extends StatelessWidget {
   final IconData icon;
   final Color color;
   final String name, sub, value, unit;
+  final bool wrapLabel;
 
   /// DENSE — one slot per calendar day, `null` for a day with no record. A
   /// compacted list draws a gap as continuity.
@@ -1364,6 +1365,7 @@ class MetricRow extends StatelessWidget {
     super.key,
     this.sub = '',
     this.unit = '',
+    this.wrapLabel = false,
     this.series = const [],
     this.rising = Rising.neither,
     this.status,
@@ -1380,8 +1382,8 @@ class MetricRow extends StatelessWidget {
         Text(
           name,
           style: F.body.copyWith(color: p.ink),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
+          maxLines: wrapLabel ? null : 1,
+          overflow: wrapLabel ? TextOverflow.visible : TextOverflow.ellipsis,
         ),
         if (sub.isNotEmpty) Text(sub, style: F.over.copyWith(color: p.ink3)),
       ],
@@ -2554,6 +2556,101 @@ class ChartFrame extends StatelessWidget {
             ),
         ],
       ),
+    );
+  }
+}
+
+/// Zone labels and recorded minutes stay together on one row. Large text
+/// scrolls instead of shrinking the type or leaving the last zone orphaned.
+class ZoneMinutesRow extends StatelessWidget {
+  final List<int> minutes;
+
+  const ZoneMinutesRow(this.minutes, {super.key});
+
+  @override
+  Widget build(BuildContext c) {
+    final values = minutes.take(ZoneBar.pigment.length).toList();
+    if (values.isEmpty) return const SizedBox.shrink();
+    final p = P.of(c), l = AppLocalizations.of(c);
+    final colours = ZoneBar.cols(p);
+    final scaler = MediaQuery.textScalerOf(c);
+    final direction = Directionality.of(c);
+    final labels = [
+      for (final v in values) l?.activityLengthMinutes(v) ?? '$v min',
+    ];
+    Size measure(String text, TextStyle style) {
+      final painter = TextPainter(
+        text: TextSpan(text: text, style: style),
+        textDirection: direction,
+        textScaler: scaler,
+        maxLines: 1,
+      )..layout();
+      return painter.size;
+    }
+
+    final zoneSize = measure('Z5', F.cap);
+    final diameter = math.max(
+      S.x8,
+      math.max(zoneSize.width, zoneSize.height) + S.x2 * 2,
+    );
+    final widths = [
+      for (final label in labels)
+        math.max(diameter, measure(label, F.over).width) + S.x1,
+    ];
+    final rowWidth = widths.fold<double>(0, (a, b) => a + b);
+    return LayoutBuilder(
+      builder: (c, box) {
+        final extra = math.max(0.0, box.maxWidth - rowWidth) / values.length;
+        return ScrollHint(
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SizedBox(
+              width: math.max(box.maxWidth, rowWidth),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (var i = 0; i < values.length; i++)
+                    SizedBox(
+                      width: widths[i] + extra,
+                      child: Semantics(
+                        label: 'Z${i + 1}, ${labels[i]}',
+                        excludeSemantics: true,
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Container(
+                              width: diameter,
+                              height: diameter,
+                              alignment: Alignment.center,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: p.wash(ZoneBar.pigment[i]),
+                                border: Border.all(color: colours[i]),
+                              ),
+                              child: Text(
+                                'Z${i + 1}',
+                                style: F.cap.copyWith(color: colours[i]),
+                                maxLines: 1,
+                                softWrap: false,
+                              ),
+                            ),
+                            const SizedBox(height: S.x1),
+                            Text(
+                              labels[i],
+                              style: F.over.copyWith(color: p.ink2),
+                              maxLines: 1,
+                              softWrap: false,
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
